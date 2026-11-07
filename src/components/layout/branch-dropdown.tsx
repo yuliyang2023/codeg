@@ -123,6 +123,8 @@ interface GitPushSucceededEventPayload {
 }
 
 interface BranchDropdownProps {
+  /** Render the shared searchable branch controls inside the Git sidebar. */
+  inline?: boolean
   /** The row's OWN folder (each conversation tile passes its own), not the
    *  active one — so a tiled view keeps every tile's branch chip live. */
   folder: FolderDetail | null
@@ -133,7 +135,11 @@ interface BranchDropdownProps {
 // The branch chip in the below-composer folder/branch row. It's mounted once per
 // conversation tile with that tile's own `folder`, and carries per-instance
 // machinery (git event subscriptions + dialogs).
-export function BranchDropdown({ folder, isChatMode }: BranchDropdownProps) {
+export function BranchDropdown({
+  folder,
+  isChatMode,
+  inline = false,
+}: BranchDropdownProps) {
   const t = useTranslations("Folder.branchDropdown")
   const ime = useImeGuard()
   const tCommon = useTranslations("Folder.common")
@@ -209,7 +215,13 @@ export function BranchDropdown({ folder, isChatMode }: BranchDropdownProps) {
     openPushWindow: openPush,
     reportConflict,
     dialogs: gitDialogs,
-  } = useGitQuickActions({ folderId, folderPath })
+  } = useGitQuickActions({
+    folderId,
+    folderPath,
+    onCompleted: () => {
+      if (inline) void loadAllBranches()
+    },
+  })
 
   const worktreeBranchSet = useMemo(
     () => new Set(branchList.worktree_branches),
@@ -342,6 +354,10 @@ export function BranchDropdown({ folder, isChatMode }: BranchDropdownProps) {
       setBranchLoading(false)
     }
   }, [folderPath])
+
+  useEffect(() => {
+    if (inline && isRepo) void loadAllBranches()
+  }, [inline, isRepo, branch, loadAllBranches])
 
   function handleDropdownOpenChange(open: boolean) {
     setDropdownOpen(open)
@@ -684,30 +700,47 @@ export function BranchDropdown({ folder, isChatMode }: BranchDropdownProps) {
     <>
       {/* Single chip: the branch name + chevron opens the searchable popup (pull
           lives inside it now). Matches the sibling folder chip's ghost xs feel. */}
-      <Popover open={dropdownOpen} onOpenChange={handleDropdownOpenChange}>
-        <PopoverTrigger asChild>
-          <Button
-            variant="ghost"
-            size="xs"
-            title={
-              isDetached
-                ? t("detachedHead", { sha: head?.short_sha ?? "" })
-                : (branch ?? undefined)
-            }
-            className="min-w-0 gap-0.5 px-1.5"
-          >
-            {isDetached ? (
-              <GitCommitHorizontal className="size-3 shrink-0 text-muted-foreground" />
-            ) : (
-              <GitBranch className="size-3 shrink-0 text-muted-foreground" />
-            )}
-            <span className="max-w-[10rem] truncate">
-              {branch ?? head?.branch ?? head?.short_sha ?? t("noBranch")}
-            </span>
-            <ChevronDown className="size-3 shrink-0 text-muted-foreground/60" />
-          </Button>
-        </PopoverTrigger>
-        {/* No `overflow-hidden`: the list's inner shell clips to the rounding so
+      {inline ? (
+        <BranchSelectorList
+          operations={operations}
+          worktreeNodes={worktreeNodes}
+          localNodes={localNodes}
+          remoteSections={remoteSections}
+          localCount={branchList.local.length}
+          remoteCount={branchList.remote.length}
+          branch={branch}
+          worktreeBranchSet={worktreeBranchSet}
+          mainWorktreeBranch={branchList.main_worktree_branch}
+          branchLoading={branchLoading}
+          loading={loading}
+          onRunOperation={runOperation}
+          onLeafAction={runLeafAction}
+        />
+      ) : (
+        <Popover open={dropdownOpen} onOpenChange={handleDropdownOpenChange}>
+          <PopoverTrigger asChild>
+            <Button
+              variant="ghost"
+              size="xs"
+              title={
+                isDetached
+                  ? t("detachedHead", { sha: head?.short_sha ?? "" })
+                  : (branch ?? undefined)
+              }
+              className="min-w-0 gap-0.5 px-1.5"
+            >
+              {isDetached ? (
+                <GitCommitHorizontal className="size-3 shrink-0 text-muted-foreground" />
+              ) : (
+                <GitBranch className="size-3 shrink-0 text-muted-foreground" />
+              )}
+              <span className="max-w-[10rem] truncate">
+                {branch ?? head?.branch ?? head?.short_sha ?? t("noBranch")}
+              </span>
+              <ChevronDown className="size-3 shrink-0 text-muted-foreground/60" />
+            </Button>
+          </PopoverTrigger>
+          {/* No `overflow-hidden`: the list's inner shell clips to the rounding so
             the right-side action bubble can overflow past this edge.
             `max-h-(--radix-popover-content-available-height)` is the vertical twin
             of the `max-w` guard: the trigger sits in the status bar, so the popup
@@ -716,31 +749,32 @@ export function BranchDropdown({ folder, isChatMode }: BranchDropdownProps) {
             and the top of the list ran off the window. Radix publishes the room it
             actually has on that side; the list below is flex-shrinkable so it
             gives way to this cap instead of overflowing it. */}
-        <PopoverContent
-          ref={contentRef}
-          side="top"
-          align="start"
-          onPointerDownOutside={onPointerDownOutside}
-          onFocusOutside={onFocusOutside}
-          className="max-h-(--radix-popover-content-available-height) w-[22rem] max-w-[calc(100vw-1rem)] p-0"
-        >
-          <BranchSelectorList
-            operations={operations}
-            worktreeNodes={worktreeNodes}
-            localNodes={localNodes}
-            remoteSections={remoteSections}
-            localCount={branchList.local.length}
-            remoteCount={branchList.remote.length}
-            branch={branch}
-            worktreeBranchSet={worktreeBranchSet}
-            mainWorktreeBranch={branchList.main_worktree_branch}
-            branchLoading={branchLoading}
-            loading={loading}
-            onRunOperation={runOperation}
-            onLeafAction={runLeafAction}
-          />
-        </PopoverContent>
-      </Popover>
+          <PopoverContent
+            ref={contentRef}
+            side="top"
+            align="start"
+            onPointerDownOutside={onPointerDownOutside}
+            onFocusOutside={onFocusOutside}
+            className="max-h-(--radix-popover-content-available-height) w-[22rem] max-w-[calc(100vw-1rem)] p-0"
+          >
+            <BranchSelectorList
+              operations={operations}
+              worktreeNodes={worktreeNodes}
+              localNodes={localNodes}
+              remoteSections={remoteSections}
+              localCount={branchList.local.length}
+              remoteCount={branchList.remote.length}
+              branch={branch}
+              worktreeBranchSet={worktreeBranchSet}
+              mainWorktreeBranch={branchList.main_worktree_branch}
+              branchLoading={branchLoading}
+              loading={loading}
+              onRunOperation={runOperation}
+              onLeafAction={runLeafAction}
+            />
+          </PopoverContent>
+        </Popover>
+      )}
 
       <AlertDialog
         open={confirmAction !== null}

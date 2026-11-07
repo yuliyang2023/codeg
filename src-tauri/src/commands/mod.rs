@@ -50,6 +50,11 @@ pub mod folders;
 pub mod forge;
 /// The `ui-render` skill and the agents it is enabled for (Skill Packs > UI).
 pub mod generative_ui;
+pub mod git_shelf;
+pub mod git_workflow;
+pub mod git_history;
+pub mod git_history_edit;
+pub mod git_tags;
 /// Folder commands set to run on the desktop's own machine ("Run on this
 /// computer"), even from a remote-desktop window. Desktop-only by design.
 #[cfg(feature = "tauri-runtime")]
@@ -86,3 +91,14 @@ pub mod work_task;
 pub mod workspace_state;
 #[cfg(feature = "tauri-runtime")]
 pub mod workspace_windows;
+pub mod git_workbench_store;
+pub mod git_changelists;
+pub mod git_smart;
+pub mod git_patch;
+pub mod local_history;
+pub mod git_console;
+pub mod git_revision;
+
+pub mod git_commit_tools;
+
+pub mod git_history_advanced;

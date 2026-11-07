@@ -43,6 +43,8 @@ import {
   FileTreeFolder,
   FileTreeIcon,
 } from "@/components/ai-elements/file-tree"
+import { gitSourceLine } from "@/lib/api"
+import { useSourceEditor } from "@/components/files/source-editor-dialog"
 import { DiffViewer } from "@/components/diff/diff-viewer"
 import { ImageDiffView } from "@/components/diff/image-diff-view"
 import {
@@ -55,7 +57,12 @@ import {
 import { toErrorMessage } from "@/lib/app-error"
 import { loadImageDiffSides, type ImageDiffSides } from "@/lib/image-diff"
 import { isBinaryImageFile, languageFromPath } from "@/lib/language-detect"
-import type { GitStashEntry, GitStatusEntry } from "@/lib/types"
+import type {
+  GitConflictInfo,
+  GitStashEntry,
+  GitStatusEntry,
+} from "@/lib/types"
+import { ConflictDialog } from "@/components/layout/conflict-dialog"
 import { cn } from "@/lib/utils"
 
 // --- File tree types & builder (same pattern as commit-dialog) ---
@@ -179,10 +186,20 @@ function statusColor(status: string) {
 
 interface StashWorkspaceProps {
   folderPath: string
+  compact?: boolean
+  folderId?: number
+  onOpenSource?: (file: string, line: number) => void | Promise<void>
 }
 
-export function StashWorkspace({ folderPath }: StashWorkspaceProps) {
+export function StashWorkspace({
+  folderPath,
+  compact = false,
+  folderId,
+  onOpenSource,
+}: StashWorkspaceProps) {
   const t = useTranslations("Folder.branchDropdown.unstashDialog")
+  const source = useSourceEditor(folderPath)
+  const [conflict, setConflict] = useState<GitConflictInfo | null>(null)
 
   const [stashes, setStashes] = useState<GitStashEntry[]>([])
   const [expandedStash, setExpandedStash] = useState<string | null>(null)
@@ -285,7 +302,11 @@ export function StashWorkspace({ folderPath }: StashWorkspaceProps) {
   async function handleApply(stashRef: string) {
     setActionLoading(true)
     try {
-      await gitStashApply(folderPath, stashRef)
+      const result = await gitStashApply(folderPath, stashRef)
+      if (result?.conflict?.has_conflicts) {
+        setConflict(result.conflict)
+        return
+      }
       toast.success(t("applySuccess"))
     } catch (err) {
       toast.error(toErrorMessage(err))
@@ -366,81 +387,110 @@ export function StashWorkspace({ folderPath }: StashWorkspaceProps) {
   }
 
   return (
-    <ResizablePanelGroup direction="horizontal" className="h-full">
-      {/* Left panel: stash cards */}
-      <ResizablePanel defaultSize={35} minSize={25}>
-        <ScrollArea className="h-full">
-          {listLoading ? (
-            <div className="flex items-center justify-center py-12">
+    <>
+      <ResizablePanelGroup
+        direction={compact ? "vertical" : "horizontal"}
+        className="h-full"
+      >
+        {/* Left panel: stash cards */}
+        <ResizablePanel defaultSize={35} minSize={25}>
+          <ScrollArea className="h-full">
+            {listLoading ? (
+              <div className="flex items-center justify-center py-12">
+                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+              </div>
+            ) : stashes.length === 0 ? (
+              <div className="flex items-center justify-center py-12 text-sm text-muted-foreground">
+                {t("noStashes")}
+              </div>
+            ) : (
+              <div className="flex flex-col gap-2 p-2">
+                {stashes.map((stash) => (
+                  <StashCard
+                    key={stash.ref_name}
+                    stash={stash}
+                    isExpanded={expandedStash === stash.ref_name}
+                    isLoadingFiles={filesLoading === stash.ref_name}
+                    actionLoading={actionLoading}
+                    files={stashFiles[stash.ref_name]}
+                    selectedFile={
+                      selectedStashRef === stash.ref_name ? selectedFile : null
+                    }
+                    onToggle={() => handleToggleStash(stash.ref_name)}
+                    onApply={() => handleApply(stash.ref_name)}
+                    onDrop={() => handleDrop(stash.ref_name)}
+                    onSelectFile={(file) =>
+                      handleSelectFile(stash.ref_name, file)
+                    }
+                    renderNode={(node) => renderNode(node, stash.ref_name)}
+                  />
+                ))}
+              </div>
+            )}
+          </ScrollArea>
+        </ResizablePanel>
+
+        <ResizableHandle />
+
+        {/* Right panel: diff viewer */}
+        <ResizablePanel defaultSize={65} minSize={40}>
+          {diffLoading ? (
+            <div className="flex h-full items-center justify-center">
               <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
             </div>
-          ) : stashes.length === 0 ? (
-            <div className="flex items-center justify-center py-12 text-sm text-muted-foreground">
-              {t("noStashes")}
-            </div>
+          ) : selectedFile && selectedStashRef ? (
+            imageSides &&
+            imageSides.file === selectedFile &&
+            imageSides.stashRef === selectedStashRef ? (
+              <ImageDiffView
+                original={imageSides.sides.original}
+                modified={imageSides.sides.modified}
+                originalLabel={`${selectedStashRef}^ (${t("original")})`}
+                modifiedLabel={`${selectedStashRef} (${t("modified")})`}
+                className="h-full"
+              />
+            ) : (
+              <DiffViewer
+                original={originalContent}
+                modified={modifiedContent}
+                originalLabel={`${selectedStashRef}^ (${t("original")})`}
+                modifiedLabel={`${selectedStashRef} (${t("modified")})`}
+                language={languageFromPath(selectedFile)}
+                onOpenSource={async (line) => {
+                  if (onOpenSource) {
+                    const mapped = await gitSourceLine(
+                      folderPath,
+                      selectedFile,
+                      selectedStashRef,
+                      line
+                    )
+                    await onOpenSource(selectedFile, mapped)
+                  } else await source.open(selectedFile, line, selectedStashRef)
+                }}
+                className="h-full"
+              />
+            )
           ) : (
-            <div className="flex flex-col gap-2 p-2">
-              {stashes.map((stash) => (
-                <StashCard
-                  key={stash.ref_name}
-                  stash={stash}
-                  isExpanded={expandedStash === stash.ref_name}
-                  isLoadingFiles={filesLoading === stash.ref_name}
-                  actionLoading={actionLoading}
-                  files={stashFiles[stash.ref_name]}
-                  selectedFile={
-                    selectedStashRef === stash.ref_name ? selectedFile : null
-                  }
-                  onToggle={() => handleToggleStash(stash.ref_name)}
-                  onApply={() => handleApply(stash.ref_name)}
-                  onDrop={() => handleDrop(stash.ref_name)}
-                  onSelectFile={(file) =>
-                    handleSelectFile(stash.ref_name, file)
-                  }
-                  renderNode={(node) => renderNode(node, stash.ref_name)}
-                />
-              ))}
+            <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+              {t("selectFile")}
             </div>
           )}
-        </ScrollArea>
-      </ResizablePanel>
-
-      <ResizableHandle />
-
-      {/* Right panel: diff viewer */}
-      <ResizablePanel defaultSize={65} minSize={40}>
-        {diffLoading ? (
-          <div className="flex h-full items-center justify-center">
-            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-          </div>
-        ) : selectedFile && selectedStashRef ? (
-          imageSides &&
-          imageSides.file === selectedFile &&
-          imageSides.stashRef === selectedStashRef ? (
-            <ImageDiffView
-              original={imageSides.sides.original}
-              modified={imageSides.sides.modified}
-              originalLabel={`${selectedStashRef}^ (${t("original")})`}
-              modifiedLabel={`${selectedStashRef} (${t("modified")})`}
-              className="h-full"
-            />
-          ) : (
-            <DiffViewer
-              original={originalContent}
-              modified={modifiedContent}
-              originalLabel={`${selectedStashRef}^ (${t("original")})`}
-              modifiedLabel={`${selectedStashRef} (${t("modified")})`}
-              language={languageFromPath(selectedFile)}
-              className="h-full"
-            />
-          )
-        ) : (
-          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-            {t("selectFile")}
-          </div>
-        )}
-      </ResizablePanel>
-    </ResizablePanelGroup>
+        </ResizablePanel>
+      </ResizablePanelGroup>
+      {source.view}
+      {folderId && (
+        <ConflictDialog
+          conflictInfo={conflict}
+          folderId={folderId}
+          folderPath={folderPath}
+          onClose={() => setConflict(null)}
+          onResolved={() => {
+            setConflict(null)
+            void loadStashes()
+          }}
+        />
+      )}
+    </>
   )
 }
 

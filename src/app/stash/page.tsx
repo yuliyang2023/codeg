@@ -96,7 +96,7 @@ function StashPageInner() {
             {error}
           </div>
         ) : folder ? (
-          <StashWorkspace folderPath={folder.path} />
+          <StashWorkspace folderPath={folder.path} folderId={folder.id} />
         ) : null}
       </main>
 

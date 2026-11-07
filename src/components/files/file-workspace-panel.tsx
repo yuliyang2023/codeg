@@ -34,6 +34,7 @@ import {
 } from "@/components/files/kept-office-previews"
 import { PdfPreview } from "@/components/files/pdf-preview"
 import { isHtmlPreviewable } from "@/lib/language-detect"
+import { GitEditorTrace } from "./git-editor-trace"
 import { DiffViewer } from "@/components/diff/diff-viewer"
 import { ImageDiffView } from "@/components/diff/image-diff-view"
 import { UnifiedDiffPreview } from "@/components/diff/unified-diff-preview"
@@ -847,6 +848,8 @@ function FileWorkspacePanelBody() {
   // The loaded monaco instance, captured at editor mount. Passing it to the
   // theme hook (instead of the hook calling useMonaco()) keeps Monaco lazy:
   // the file-less empty state should not load Monaco before an editor opens.
+  const [traceEditor, setTraceEditor] =
+    useState<MonacoEditorNs.IStandaloneCodeEditor | null>(null)
   const [editorMonaco, setEditorMonaco] = useState<Monaco | null>(null)
   const editorTheme = useMonacoWorkspaceTheme(editorMonaco)
   // Keep models from the first mount: the wrapper captures this option in
@@ -1348,6 +1351,7 @@ function FileWorkspacePanelBody() {
   const handleEditorMount: OnMount = useCallback(
     (editorInstance, monaco) => {
       editorRef.current = editorInstance
+      setTraceEditor(editorInstance)
       setEditorMonaco(monaco)
       bindImeEditor(editorInstance)
       cursorListenerRef.current?.dispose()
@@ -1703,6 +1707,7 @@ function FileWorkspacePanelBody() {
   }
 
   if (activeFileTab.kind === "rich-diff") {
+    const sourcePath = activeFileTab.path
     const richDiffParts = parseFileTabId(activeFileTab.id)
     const isCommitDiff = richDiffParts?.kind === "diff-commit"
     const isExternalConflictDiff =
@@ -1768,6 +1773,16 @@ function FileWorkspacePanelBody() {
             originalLabel={origLabel}
             modifiedLabel={modLabel}
             language={activeFileTab.language}
+            onOpenSource={
+              sourcePath
+                ? async (line) => {
+                    await openFilePreview(sourcePath, {
+                      line,
+                      folderId: activeFileTab.folderId ?? undefined,
+                    })
+                  }
+                : undefined
+            }
             className="h-full"
           />
         )}
@@ -2095,6 +2110,17 @@ function FileWorkspacePanelBody() {
               )}
             </div>
           </div>
+        )}
+        {isFileTab && owningFolder && (
+          <GitEditorTrace
+            key={activeAbsPath}
+            editor={traceEditor}
+            monaco={editorMonaco}
+            path={owningFolder.rootPath}
+            file={owningFolder.relPath}
+            content={renderedContent}
+            dirty={fileIsDirty}
+          />
         )}
         <div className="flex-1 min-h-0">
           {hasTabContent(activeFileTab) || !activeFileTab.loading ? (

@@ -9,6 +9,7 @@ import {
   useState,
 } from "react"
 import dynamic from "next/dynamic"
+import { useTranslations } from "next-intl"
 import { ChevronLeft, ChevronRight } from "lucide-react"
 import { useMonaco } from "@monaco-editor/react"
 import type { DiffOnMount } from "@monaco-editor/react"
@@ -20,6 +21,10 @@ import {
 } from "@/lib/monaco-themes"
 import { useZoomLevel, useEditorFont } from "@/hooks/use-appearance"
 import { cn } from "@/lib/utils"
+import { useDiffViewMode } from "@/lib/diff-view-mode-prefs"
+import { useDiffCollapse } from "@/lib/diff-collapse-prefs"
+import { diffSourceLine } from "@/lib/diff-source-line"
+import { ViewModeToggle } from "./diff-view-mode-toggle"
 
 import "@/lib/monaco-local"
 
@@ -45,6 +50,7 @@ export interface DiffViewerProps {
   modifiedLabel?: string
   language?: string
   className?: string
+  onOpenSource?: (line: number) => void | Promise<void>
 }
 
 export function DiffViewer({
@@ -54,7 +60,11 @@ export function DiffViewer({
   modifiedLabel = "Modified",
   language = "plaintext",
   className,
+  onOpenSource,
 }: DiffViewerProps) {
+  const t = useTranslations("Folder.diffPreview")
+  const [collapseUnchanged, setCollapseUnchanged] = useDiffCollapse()
+  const [viewMode, setViewMode] = useDiffViewMode("split")
   // Conditionally mounted (only when a diff is shown), so useMonaco() here is
   // already lazy — Monaco is loading for this editor anyway.
   const monaco = useMonaco()
@@ -65,6 +75,8 @@ export function DiffViewer({
   const diffEditorRef = useRef<MonacoEditorNs.IStandaloneDiffEditor | null>(
     null
   )
+  const [mountedEditor, setMountedEditor] =
+    useState<MonacoEditorNs.IStandaloneDiffEditor | null>(null)
   const [diffChanges, setDiffChanges] = useState<MonacoEditorNs.ILineChange[]>(
     []
   )
@@ -75,6 +87,7 @@ export function DiffViewer({
 
   const handleEditorMount: DiffOnMount = useCallback((editor) => {
     diffEditorRef.current = editor
+    setMountedEditor(editor)
     let scrolledToFirst = false
 
     const updateDiffs = () => {
@@ -98,6 +111,33 @@ export function DiffViewer({
     editor.onDidUpdateDiff(updateDiffs)
     initialDiffReadRef.current = setTimeout(updateDiffs, 300)
   }, [])
+
+  useIsomorphicLayoutEffect(() => {
+    if (!mountedEditor || !onOpenSource || !monaco) return
+    const actions = (["original", "modified"] as const).map((side) => {
+      const codeEditor =
+        side === "original"
+          ? mountedEditor.getOriginalEditor()
+          : mountedEditor.getModifiedEditor()
+      return codeEditor.addAction({
+        id: "codeg.diff.openSource",
+        keybindings: [monaco.KeyCode.F4],
+        label: t("goToSource"),
+        contextMenuGroupId: "navigation",
+        contextMenuOrder: 1,
+        run: async () => {
+          const line = diffSourceLine(
+            codeEditor.getPosition()?.lineNumber ?? 1,
+            side,
+            mountedEditor.getLineChanges() ?? [],
+            mountedEditor.getModifiedEditor().getModel()?.getLineCount() ?? 1
+          )
+          await onOpenSource(line)
+        },
+      })
+    })
+    return () => actions.forEach((action) => action.dispose())
+  }, [mountedEditor, onOpenSource, monaco, t])
 
   // @monaco-editor/react tears the diff editor down in the wrong order on
   // unmount: it disposes both text models and only then the widget. Monaco
@@ -165,8 +205,14 @@ export function DiffViewer({
   // prop, so an inline literal would re-push the whole option set each render.
   const diffOptions = useMemo<MonacoEditorNs.IDiffEditorConstructionOptions>(
     () => ({
+      hideUnchangedRegions: {
+        enabled: collapseUnchanged,
+        contextLineCount: 3,
+        minimumLineCount: 8,
+        revealLineCount: 20,
+      },
       readOnly: true,
-      renderSideBySide: true,
+      renderSideBySide: viewMode === "split",
       renderSideBySideInlineBreakpoint: 0,
       automaticLayout: true,
       fontSize: (editorFontSize * zoomLevel) / 100,
@@ -182,6 +228,8 @@ export function DiffViewer({
       originalEditable: false,
     }),
     [
+      viewMode,
+      collapseUnchanged,
       zoomLevel,
       editorFontStack,
       editorFontSize,
@@ -214,7 +262,7 @@ export function DiffViewer({
 
   return (
     <div className={cn("flex h-full flex-col", className)}>
-      <div className="flex items-center gap-3 border-b bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground">
+      <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground">
         <span className="font-medium">{originalLabel}</span>
         <span className="text-muted-foreground/60">↔</span>
         <span className="font-medium">{modifiedLabel}</span>
@@ -253,6 +301,20 @@ export function DiffViewer({
             </div>
           </>
         )}
+        <button
+          type="button"
+          aria-pressed={collapseUnchanged}
+          title={t("collapseUnchangedHint")}
+          onClick={() => setCollapseUnchanged(!collapseUnchanged)}
+          className="rounded border border-border bg-background px-2 py-0.5 text-3xs hover:bg-muted aria-pressed:bg-muted"
+        >
+          {t("collapseUnchanged")}
+        </button>
+        <ViewModeToggle
+          view={viewMode}
+          onSwitch={setViewMode}
+          className="ml-auto"
+        />
       </div>
       <div className="min-h-0 flex-1">
         <MonacoDiffEditor

@@ -1,5 +1,7 @@
 "use client"
 
+import { GitFileHistoryProvider, GitFileHistoryMenu } from "./git-file-history"
+
 import {
   createContext,
   useCallback,
@@ -789,6 +791,7 @@ function RenderNode({
               </ContextMenuItem>
             </ContextMenuSubContent>
           </ContextMenuSub>
+          <GitFileHistoryMenu file={node.path} disabled={isGitMenuDisabled} />
           <ContextMenuSub>
             <ContextMenuSubTrigger disabled={isGitMenuDisabled}>
               {t("git")}
@@ -1133,7 +1136,7 @@ function RenderNode({
   )
 }
 
-export function FileTreeTab() {
+function FileTreeTabContent() {
   const t = useTranslations("Folder.fileTreeTab")
   const tCommon = useTranslations("Folder.common")
   const {
@@ -3680,5 +3683,13 @@ export function FileTreeTab() {
         </AlertDialogContent>
       </AlertDialog>
     </div>
+  )
+}
+
+export function FileTreeTab() {
+  return (
+    <GitFileHistoryProvider>
+      <FileTreeTabContent />
+    </GitFileHistoryProvider>
   )
 }

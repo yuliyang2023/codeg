@@ -74,8 +74,8 @@ vi.mock("./aux-panel-file-tree-tab", () => ({
 vi.mock("./aux-panel-git-changes-tab", () => ({
   GitChangesTab: () => <div data-testid="body-changes" />,
 }))
-vi.mock("./aux-panel-git-log-tab", () => ({
-  GitLogTab: () => <div data-testid="body-git_log" />,
+vi.mock("./git-workbench-tab", () => ({
+  GitWorkbenchTab: () => <div data-testid="body-git_log" />,
 }))
 vi.mock("./aux-panel-automations-tab", () => ({
   AutomationsAuxTab: () => <div data-testid="body-automations" />,

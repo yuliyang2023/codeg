@@ -340,13 +340,19 @@ pub struct GitStashPushParams {
     pub path: String,
     pub message: Option<String>,
     pub keep_index: bool,
+    pub include_untracked: Option<bool>,
 }
 
 pub async fn git_stash_push(
     Json(params): Json<GitStashPushParams>,
 ) -> Result<Json<String>, AppCommandError> {
-    let result =
-        folder_commands::git_stash_push(params.path, params.message, params.keep_index).await?;
+    let result = folder_commands::git_stash_push(
+        params.path,
+        params.message,
+        params.keep_index,
+        params.include_untracked,
+    )
+    .await?;
     Ok(Json(result))
 }
 
@@ -371,11 +377,136 @@ pub async fn git_stash_list(
     Ok(Json(result))
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShelfRefParams {
+    pub path: String,
+    pub shelf_ref: String,
+}
+
+#[derive(Deserialize)]
+pub struct ShelfSaveParams {
+    pub path: String,
+    pub message: String,
+    pub files: Option<Vec<String>>,
+}
+
+pub async fn git_shelf_list(
+    Json(params): Json<PathParams>,
+) -> Result<Json<Vec<crate::commands::git_shelf::GitShelfEntry>>, AppCommandError> {
+    Ok(Json(
+        crate::commands::git_shelf::git_shelf_list(params.path).await?,
+    ))
+}
+
+pub async fn git_shelf_save(
+    Json(params): Json<ShelfSaveParams>,
+) -> Result<Json<()>, AppCommandError> {
+    crate::commands::git_shelf::git_shelf_save(params.path, params.message, params.files).await?;
+    Ok(Json(()))
+}
+
+pub async fn git_shelf_apply(
+    Json(params): Json<ShelfRefParams>,
+) -> Result<Json<crate::commands::git_workflow::GitWorkflowResult>, AppCommandError> {
+    Ok(Json(
+        crate::commands::git_shelf::git_shelf_apply(params.path, params.shelf_ref).await?,
+    ))
+}
+
+pub async fn git_shelf_drop(
+    Json(params): Json<ShelfRefParams>,
+) -> Result<Json<()>, AppCommandError> {
+    crate::commands::git_shelf::git_shelf_drop(params.path, params.shelf_ref).await?;
+    Ok(Json(()))
+}
+
+pub async fn git_shelf_diff(
+    Json(params): Json<ShelfRefParams>,
+) -> Result<Json<String>, AppCommandError> {
+    Ok(Json(
+        crate::commands::git_shelf::git_shelf_diff(params.path, params.shelf_ref).await?,
+    ))
+}
+
 pub async fn git_stash_apply(
     Json(params): Json<PathStashRefParams>,
-) -> Result<Json<String>, AppCommandError> {
+) -> Result<Json<crate::commands::git_workflow::GitWorkflowResult>, AppCommandError> {
     let result = folder_commands::git_stash_apply(params.path, params.stash_ref).await?;
     Ok(Json(result))
+}
+
+#[derive(Deserialize)]
+pub struct CommitActionParams {
+    pub path: String,
+    pub commit: String,
+    pub operation: String,
+}
+
+pub async fn git_commit_action(
+    Json(params): Json<CommitActionParams>,
+) -> Result<Json<crate::commands::git_workflow::GitWorkflowResult>, AppCommandError> {
+    Ok(Json(
+        crate::commands::git_workflow::git_commit_action(
+            params.path,
+            params.commit,
+            params.operation,
+        )
+        .await?,
+    ))
+}
+
+pub async fn git_amend_info(
+    Json(params): Json<PathParams>,
+) -> Result<Json<crate::commands::git_workflow::GitAmendInfo>, AppCommandError> {
+    Ok(Json(
+        crate::commands::git_workflow::git_amend_info(params.path).await?,
+    ))
+}
+
+pub async fn git_operation_state(
+    Json(params): Json<PathParams>,
+) -> Result<Json<Option<folder_commands::GitConflictInfo>>, AppCommandError> {
+    Ok(Json(
+        crate::commands::git_workflow::git_operation_state(params.path).await?,
+    ))
+}
+
+#[derive(Deserialize)]
+pub struct SkipParams {
+    pub path: String,
+    pub operation: String,
+}
+
+pub async fn git_skip_operation(
+    Json(params): Json<SkipParams>,
+) -> Result<Json<crate::commands::git_workflow::GitWorkflowResult>, AppCommandError> {
+    Ok(Json(
+        crate::commands::git_workflow::git_skip_operation(params.path, params.operation).await?,
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AmendParams {
+    pub path: String,
+    pub message: String,
+    pub files: Vec<String>,
+    pub expected_head: String,
+}
+
+pub async fn git_amend(
+    Json(params): Json<AmendParams>,
+) -> Result<Json<crate::commands::git_workflow::GitAmendResult>, AppCommandError> {
+    Ok(Json(
+        crate::commands::git_workflow::git_amend(
+            params.path,
+            params.message,
+            params.files,
+            params.expected_head,
+        )
+        .await?,
+    ))
 }
 
 pub async fn git_stash_drop(
@@ -705,6 +836,7 @@ pub async fn git_push(
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitCommitParams {
+    pub options: Option<folder_commands::GitCommitOptions>,
     pub folder_id: Option<i32>,
     pub path: String,
     pub message: String,
@@ -717,13 +849,14 @@ pub async fn git_commit(
 ) -> Result<Json<folder_commands::GitCommitResult>, AppCommandError> {
     let db = &state.db;
     let emitter = state.emitter.clone();
-    let result = folder_commands::git_commit_core(
+    let result = folder_commands::git_commit_options_core(
         &emitter,
         params.folder_id,
         &db.conn,
         &params.path,
         &params.message,
         &params.files,
+        params.options.unwrap_or_default(),
     )
     .await?;
     Ok(Json(result))
@@ -775,4 +908,552 @@ pub async fn clone_repository(
     )
     .await?;
     Ok(Json(()))
+}
+
+#[derive(Deserialize)]
+pub struct GitHistoryParams {
+    pub path: String,
+    pub query: crate::commands::git_history::GitHistoryQuery,
+}
+
+pub async fn git_history(
+    Json(params): Json<GitHistoryParams>,
+) -> Result<Json<crate::commands::git_history::GitHistoryResult>, AppCommandError> {
+    Ok(Json(
+        crate::commands::git_history::git_history(params.path, params.query).await?,
+    ))
+}
+
+#[derive(Deserialize)]
+pub struct GitBlameParams {
+    pub path: String,
+    pub file: String,
+    pub revision: Option<String>,
+}
+pub async fn git_blame(
+    Json(params): Json<GitBlameParams>,
+) -> Result<Json<Vec<crate::commands::git_history::GitBlameLine>>, AppCommandError> {
+    Ok(Json(
+        crate::commands::git_history::git_blame(params.path, params.file, params.revision).await?,
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitTagCreateParams {
+    pub path: String,
+    pub name: String,
+    pub revision: String,
+    pub message: Option<String>,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitTagActionParams {
+    pub path: String,
+    pub name: String,
+    pub operation: String,
+    pub expected_object: String,
+    pub remote: Option<String>,
+}
+pub async fn git_tags(
+    Json(params): Json<PathParams>,
+) -> Result<Json<Vec<crate::commands::git_tags::GitTag>>, AppCommandError> {
+    Ok(Json(
+        crate::commands::git_tags::git_tags(params.path).await?,
+    ))
+}
+pub async fn git_tag_create(
+    Json(params): Json<GitTagCreateParams>,
+) -> Result<Json<String>, AppCommandError> {
+    Ok(Json(
+        crate::commands::git_tags::git_tag_create(
+            params.path,
+            params.name,
+            params.revision,
+            params.message,
+        )
+        .await?,
+    ))
+}
+pub async fn git_tag_action(
+    Json(params): Json<GitTagActionParams>,
+) -> Result<Json<crate::commands::git_workflow::GitWorkflowResult>, AppCommandError> {
+    Ok(Json(
+        crate::commands::git_tags::git_tag_action(
+            params.path,
+            params.name,
+            params.operation,
+            params.expected_object,
+            params.remote,
+        )
+        .await?,
+    ))
+}
+
+#[derive(Deserialize)]
+pub struct GitHistoryPlanParams {
+    pub path: String,
+    pub base: String,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitHistoryEditParams {
+    pub path: String,
+    pub base: String,
+    pub expected_head: String,
+    pub steps: Vec<crate::commands::git_history_edit::GitHistoryStep>,
+    pub allow_published: bool,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitUndoParams {
+    pub path: String,
+    pub expected_head: String,
+    pub allow_published: bool,
+}
+pub async fn git_history_plan(
+    Json(params): Json<GitHistoryPlanParams>,
+) -> Result<Json<crate::commands::git_history_edit::GitHistoryPlan>, AppCommandError> {
+    Ok(Json(
+        crate::commands::git_history_edit::git_history_plan(params.path, params.base).await?,
+    ))
+}
+pub async fn git_history_edit(
+    Json(params): Json<GitHistoryEditParams>,
+) -> Result<Json<crate::commands::git_history_edit::GitHistoryEditResult>, AppCommandError> {
+    Ok(Json(
+        crate::commands::git_history_edit::git_history_edit(
+            params.path,
+            params.base,
+            params.expected_head,
+            params.steps,
+            params.allow_published,
+        )
+        .await?,
+    ))
+}
+pub async fn git_undo_commit(
+    Json(params): Json<GitUndoParams>,
+) -> Result<Json<crate::commands::git_workflow::GitWorkflowResult>, AppCommandError> {
+    Ok(Json(
+        crate::commands::git_history_edit::git_undo_commit(
+            params.path,
+            params.expected_head,
+            params.allow_published,
+        )
+        .await?,
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitChangelistsParams {
+    pub path: String,
+}
+pub async fn git_changelists(
+    Json(params): Json<GitChangelistsParams>,
+) -> Result<Json<crate::commands::git_changelists::GitChangelists>, AppCommandError> {
+    Ok(Json(
+        crate::commands::git_changelists::git_changelists(params.path).await?,
+    ))
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitChangelistUpdateParams {
+    pub path: String,
+    pub expected_revision: u64,
+    pub operation: String,
+    pub id: Option<String>,
+    pub name: Option<String>,
+    pub files: Option<Vec<String>>,
+}
+pub async fn git_changelist_update(
+    Json(params): Json<GitChangelistUpdateParams>,
+) -> Result<Json<crate::commands::git_changelists::GitChangelists>, AppCommandError> {
+    Ok(Json(
+        crate::commands::git_changelists::git_changelist_update(
+            params.path,
+            params.expected_revision,
+            params.operation,
+            params.id,
+            params.name,
+            params.files,
+        )
+        .await?,
+    ))
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitSmartStateParams {
+    pub path: String,
+}
+pub async fn git_smart_state(
+    Json(params): Json<GitSmartStateParams>,
+) -> Result<Json<Option<crate::commands::git_smart::GitSmartState>>, AppCommandError> {
+    Ok(Json(
+        crate::commands::git_smart::git_smart_state(params.path).await?,
+    ))
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitSmartRunParams {
+    pub path: String,
+    pub operation: String,
+    pub target: String,
+}
+pub async fn git_smart_run(
+    Json(params): Json<GitSmartRunParams>,
+) -> Result<Json<crate::commands::git_smart::GitSmartResult>, AppCommandError> {
+    Ok(Json(
+        crate::commands::git_smart::git_smart_run(params.path, params.operation, params.target)
+            .await?,
+    ))
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitSmartResumeParams {
+    pub path: String,
+    pub finish_manual: bool,
+}
+pub async fn git_smart_resume(
+    Json(params): Json<GitSmartResumeParams>,
+) -> Result<Json<crate::commands::git_smart::GitSmartResult>, AppCommandError> {
+    Ok(Json(
+        crate::commands::git_smart::git_smart_resume(params.path, params.finish_manual).await?,
+    ))
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitCompareFileParams {
+    pub path: String,
+    pub file: String,
+    pub base: String,
+    pub target: String,
+}
+pub async fn git_compare_file(
+    Json(params): Json<GitCompareFileParams>,
+) -> Result<Json<crate::commands::git_patch::GitFileComparison>, AppCommandError> {
+    Ok(Json(
+        crate::commands::git_patch::git_compare_file(
+            params.path,
+            params.file,
+            params.base,
+            params.target,
+        )
+        .await?,
+    ))
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitPatchCreateParams {
+    pub path: String,
+    pub files: Vec<String>,
+}
+pub async fn git_patch_create(
+    Json(params): Json<GitPatchCreateParams>,
+) -> Result<Json<String>, AppCommandError> {
+    Ok(Json(
+        crate::commands::git_patch::git_patch_create(params.path, params.files).await?,
+    ))
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitPatchPreviewParams {
+    pub path: String,
+    pub patch: String,
+    pub reverse: bool,
+    pub stage: bool,
+}
+pub async fn git_patch_preview(
+    Json(params): Json<GitPatchPreviewParams>,
+) -> Result<Json<crate::commands::git_patch::GitPatchPreview>, AppCommandError> {
+    Ok(Json(
+        crate::commands::git_patch::git_patch_preview(
+            params.path,
+            params.patch,
+            params.reverse,
+            params.stage,
+        )
+        .await?,
+    ))
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitPatchApplyParams {
+    pub path: String,
+    pub patch: String,
+    pub reverse: bool,
+    pub stage: bool,
+}
+pub async fn git_patch_apply(
+    Json(params): Json<GitPatchApplyParams>,
+) -> Result<Json<String>, AppCommandError> {
+    Ok(Json(
+        crate::commands::git_patch::git_patch_apply(
+            params.path,
+            params.patch,
+            params.reverse,
+            params.stage,
+        )
+        .await?,
+    ))
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalHistoryCaptureParams {
+    pub path: String,
+    pub file: Option<String>,
+    pub label: Option<String>,
+}
+pub async fn local_history_capture(
+    Json(params): Json<LocalHistoryCaptureParams>,
+) -> Result<Json<usize>, AppCommandError> {
+    Ok(Json(
+        crate::commands::local_history::local_history_capture(
+            params.path,
+            params.file,
+            params.label,
+        )
+        .await?,
+    ))
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalHistoryListParams {
+    pub path: String,
+    pub file: Option<String>,
+}
+pub async fn local_history_list(
+    Json(params): Json<LocalHistoryListParams>,
+) -> Result<Json<Vec<crate::commands::local_history::LocalHistoryEntry>>, AppCommandError> {
+    Ok(Json(
+        crate::commands::local_history::local_history_list(params.path, params.file).await?,
+    ))
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalHistoryContentParams {
+    pub path: String,
+    pub id: String,
+}
+pub async fn local_history_content(
+    Json(params): Json<LocalHistoryContentParams>,
+) -> Result<Json<crate::commands::local_history::LocalHistoryContent>, AppCommandError> {
+    Ok(Json(
+        crate::commands::local_history::local_history_content(params.path, params.id).await?,
+    ))
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalHistoryRestoreParams {
+    pub path: String,
+    pub id: String,
+    pub expected_hash: Option<String>,
+}
+pub async fn local_history_restore(
+    Json(params): Json<LocalHistoryRestoreParams>,
+) -> Result<Json<()>, AppCommandError> {
+    Ok(Json(
+        crate::commands::local_history::local_history_restore(
+            params.path,
+            params.id,
+            params.expected_hash,
+        )
+        .await?,
+    ))
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitConsoleListParams {
+    pub path: String,
+}
+pub async fn git_console_list(
+    Json(params): Json<GitConsoleListParams>,
+) -> Result<Json<Vec<crate::commands::git_console::GitConsoleEntry>>, AppCommandError> {
+    Ok(Json(
+        crate::commands::git_console::git_console_list(params.path).await?,
+    ))
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitConsoleClearParams {
+    pub path: String,
+}
+pub async fn git_console_clear(
+    Json(params): Json<GitConsoleClearParams>,
+) -> Result<Json<()>, AppCommandError> {
+    Ok(Json(
+        crate::commands::git_console::git_console_clear(params.path).await?,
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitRevisionInfoParams {
+    pub path: String,
+    pub revision: String,
+}
+pub async fn git_revision_info(
+    Json(params): Json<GitRevisionInfoParams>,
+) -> Result<Json<crate::commands::git_revision::GitRevisionInfo>, AppCommandError> {
+    Ok(Json(
+        crate::commands::git_revision::git_revision_info(params.path, params.revision).await?,
+    ))
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitRevisionTreeParams {
+    pub path: String,
+    pub revision: String,
+    pub directory: String,
+}
+pub async fn git_revision_tree(
+    Json(params): Json<GitRevisionTreeParams>,
+) -> Result<Json<Vec<crate::commands::git_revision::GitRevisionTreeEntry>>, AppCommandError> {
+    Ok(Json(
+        crate::commands::git_revision::git_revision_tree(
+            params.path,
+            params.revision,
+            params.directory,
+        )
+        .await?,
+    ))
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitRevisionFileParams {
+    pub path: String,
+    pub revision: String,
+    pub file: String,
+}
+pub async fn git_revision_file(
+    Json(params): Json<GitRevisionFileParams>,
+) -> Result<Json<crate::commands::git_revision::GitRevisionFile>, AppCommandError> {
+    Ok(Json(
+        crate::commands::git_revision::git_revision_file(params.path, params.revision, params.file)
+            .await?,
+    ))
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitRevisionCompareParams {
+    pub path: String,
+    pub base: String,
+    pub target: String,
+}
+pub async fn git_revision_compare(
+    Json(params): Json<GitRevisionCompareParams>,
+) -> Result<Json<crate::commands::git_revision::GitRevisionComparison>, AppCommandError> {
+    Ok(Json(
+        crate::commands::git_revision::git_revision_compare(
+            params.path,
+            params.base,
+            params.target,
+        )
+        .await?,
+    ))
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitRevisionCheckoutParams {
+    pub path: String,
+    pub revision: String,
+    pub expected_head: String,
+}
+pub async fn git_revision_checkout(
+    Json(params): Json<GitRevisionCheckoutParams>,
+) -> Result<Json<String>, AppCommandError> {
+    Ok(Json(
+        crate::commands::git_revision::git_revision_checkout(
+            params.path,
+            params.revision,
+            params.expected_head,
+        )
+        .await?,
+    ))
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitSourceLineParams {
+    pub path: String,
+    pub file: String,
+    pub revision: String,
+    pub line: u32,
+}
+pub async fn git_source_line(
+    Json(params): Json<GitSourceLineParams>,
+) -> Result<Json<u32>, AppCommandError> {
+    Ok(Json(
+        crate::commands::git_revision::git_source_line(
+            params.path,
+            params.file,
+            params.revision,
+            params.line,
+        )
+        .await?,
+    ))
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitLineHistoryParams {
+    pub path: String,
+    pub file: String,
+    pub start: u32,
+    pub end: u32,
+    pub revision: Option<String>,
+    pub skip: Option<u32>,
+}
+pub async fn git_line_history(
+    Json(params): Json<GitLineHistoryParams>,
+) -> Result<Json<Vec<crate::commands::git_revision::GitLineHistoryEntry>>, AppCommandError> {
+    Ok(Json(
+        crate::commands::git_revision::git_line_history(
+            params.path,
+            params.file,
+            params.start,
+            params.end,
+            params.revision,
+            params.skip,
+        )
+        .await?,
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitCommitToolsParams {
+    pub path: String,
+    pub operation: String,
+    pub files: Option<Vec<String>>,
+    pub shelf_ref: Option<String>,
+    pub name: Option<String>,
+    pub group: Option<String>,
+}
+pub async fn git_commit_tools(
+    Json(p): Json<GitCommitToolsParams>,
+) -> Result<Json<serde_json::Value>, AppCommandError> {
+    Ok(Json(
+        crate::commands::git_commit_tools::git_commit_tools(
+            p.path,
+            p.operation,
+            p.files,
+            p.shelf_ref,
+            p.name,
+            p.group,
+        )
+        .await?,
+    ))
+}
+
+#[derive(Deserialize)]
+pub struct GitHistoryAdvancedParams {
+    pub path: String,
+    pub request: crate::commands::git_history_advanced::HistoryRequest,
+}
+pub async fn git_history_advanced(
+    Json(p): Json<GitHistoryAdvancedParams>,
+) -> Result<Json<serde_json::Value>, AppCommandError> {
+    Ok(Json(
+        crate::commands::git_history_advanced::git_history_advanced(p.path, p.request).await?,
+    ))
 }

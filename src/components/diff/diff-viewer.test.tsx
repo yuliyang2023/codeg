@@ -1,5 +1,7 @@
-import { render, screen } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { NextIntlClientProvider } from "next-intl"
 import { beforeEach, describe, expect, it, vi } from "vitest"
+import enMessages from "@/i18n/messages/en.json"
 
 // Shared recorder for the fake Monaco pair below. Declared through
 // `vi.hoisted` so the module factory (which runs before this file's body) can
@@ -9,7 +11,25 @@ const harness = vi.hoisted(() => {
   // The model pair the fake widget currently holds — the state Monaco's
   // DiffEditorWidget consults through its `onWillDispose` listeners.
   const state: { attached: Record<string, object> | null } = { attached: null }
-  return { events, state }
+  const actions = new Map<
+    string,
+    { label: string; keybindings: number[]; run: () => Promise<void> }
+  >()
+  const positions = { original: 1, modified: 1 }
+  const changes: {
+    originalStartLineNumber: number
+    originalEndLineNumber: number
+    modifiedStartLineNumber: number
+    modifiedEndLineNumber: number
+  }[] = []
+  return {
+    events,
+    state,
+    actions,
+    positions,
+    changes,
+    monaco: { KeyCode: { F4: 62 } },
+  }
 })
 
 // Stand-in for `@monaco-editor/react`'s DiffEditor that reproduces the two
@@ -43,18 +63,36 @@ vi.mock("@monaco-editor/react", async () => {
     }
     model = { original: makeModel("original"), modified: makeModel("modified") }
     harness.state.attached = model
-    const innerEditor = {
+    const makeInnerEditor = (side: "original" | "modified") => ({
       revealLineInCenter: () => {},
       setPosition: () => {},
-    }
+      getPosition: () => ({ lineNumber: harness.positions[side], column: 1 }),
+      getModel: () => ({ getLineCount: () => 100 }),
+      addAction: (action: {
+        label: string
+        keybindings: number[]
+        run: () => Promise<void>
+      }) => {
+        harness.actions.set(side, action)
+        return {
+          dispose: () => {
+            if (harness.actions.get(side) === action)
+              harness.actions.delete(side)
+          },
+        }
+      },
+    })
+    const originalEditor = makeInnerEditor("original")
+    const modifiedEditor = makeInnerEditor("modified")
     return {
       getModel: () => model,
       setModel: (next: typeof model) => {
         model = next
         harness.state.attached = next
       },
-      getModifiedEditor: () => innerEditor,
-      getLineChanges: () => [],
+      getOriginalEditor: () => originalEditor,
+      getModifiedEditor: () => modifiedEditor,
+      getLineChanges: () => harness.changes,
       onDidUpdateDiff: () => ({ dispose: () => {} }),
       dispose: () => harness.events.push("editor:dispose"),
     }
@@ -62,8 +100,13 @@ vi.mock("@monaco-editor/react", async () => {
 
   const DiffEditor = ({
     onMount,
+    options,
   }: {
     onMount?: (editor: ReturnType<typeof makeDiffEditor>) => void
+    options?: {
+      renderSideBySide?: boolean
+      hideUnchangedRegions?: { enabled?: boolean }
+    }
   }) => {
     useEffect(() => {
       const editor = makeDiffEditor()
@@ -78,12 +121,16 @@ vi.mock("@monaco-editor/react", async () => {
       }
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [])
-    return createElement("div", { "data-testid": "mock-diff-editor" })
+    return createElement("div", {
+      "data-testid": "mock-diff-editor",
+      "data-side-by-side": String(options?.renderSideBySide),
+      "data-collapse": String(options?.hideUnchangedRegions?.enabled),
+    })
   }
 
   return {
     DiffEditor,
-    useMonaco: () => null,
+    useMonaco: () => harness.monaco,
     loader: { config: () => {} },
   }
 })
@@ -110,6 +157,117 @@ const { DiffEditor: MockDiffEditor } =
     DiffEditor: () => React.ReactElement
   }
 
+function Wrapper({ children }: { children: React.ReactNode }) {
+  return (
+    <NextIntlClientProvider locale="en" messages={enMessages}>
+      {children}
+    </NextIntlClientProvider>
+  )
+}
+
+beforeEach(() => {
+  localStorage.clear()
+  harness.actions.clear()
+  harness.changes.length = 0
+  harness.positions.original = 1
+  harness.positions.modified = 1
+})
+
+describe("DiffViewer Go to Source", () => {
+  it("registers both context menus, maps old-side lines and cleans up", async () => {
+    const openSource = vi.fn()
+    harness.positions.original = 7
+    harness.positions.modified = 20
+    harness.changes.push({
+      originalStartLineNumber: 2,
+      originalEndLineNumber: 0,
+      modifiedStartLineNumber: 3,
+      modifiedEndLineNumber: 5,
+    })
+    const view = render(
+      <DiffViewer original="a" modified="b" onOpenSource={openSource} />,
+      { wrapper: Wrapper }
+    )
+    await waitFor(() => expect(harness.actions.size).toBe(2))
+    expect(harness.actions.get("original")?.label).toBe("Go to Source")
+    expect(harness.actions.get("original")?.keybindings).toEqual([62])
+    expect(harness.actions.get("modified")?.keybindings).toEqual([62])
+    await act(() => harness.actions.get("original")!.run())
+    expect(openSource).toHaveBeenLastCalledWith(10)
+    await act(() => harness.actions.get("modified")!.run())
+    expect(openSource).toHaveBeenLastCalledWith(20)
+    const nextSource = vi.fn()
+    view.rerender(
+      <DiffViewer original="a" modified="b" onOpenSource={nextSource} />
+    )
+    await act(() => harness.actions.get("modified")!.run())
+    expect(nextSource).toHaveBeenCalledWith(20)
+    expect(openSource).toHaveBeenCalledTimes(2)
+    view.unmount()
+    expect(harness.actions.size).toBe(0)
+  })
+})
+
+describe("DiffViewer layout", () => {
+  const labels = enMessages.Folder.diffPreview.viewMode
+
+  it("switches to unified without remounting the editor and remembers the choice", async () => {
+    harness.events.length = 0
+    const view = render(<DiffViewer original="before" modified="after" />, {
+      wrapper: Wrapper,
+    })
+    const editor = await screen.findByTestId("mock-diff-editor")
+    expect(editor).toHaveAttribute("data-side-by-side", "true")
+    fireEvent.click(screen.getByRole("button", { name: labels.unified }))
+    expect(editor).toHaveAttribute("data-side-by-side", "false")
+    expect(localStorage.getItem("workspace:diff-view-mode")).toBe("unified")
+    expect(harness.events).toEqual([])
+    view.unmount()
+    render(<DiffViewer original="other" modified="file" />, {
+      wrapper: Wrapper,
+    })
+    expect(await screen.findByTestId("mock-diff-editor")).toHaveAttribute(
+      "data-side-by-side",
+      "false"
+    )
+    fireEvent.click(screen.getByRole("button", { name: labels.split }))
+    expect(screen.getByTestId("mock-diff-editor")).toHaveAttribute(
+      "data-side-by-side",
+      "true"
+    )
+  })
+
+  it("synchronizes multiple open viewers and changes from another browser tab", async () => {
+    render(
+      <>
+        <DiffViewer original="a" modified="b" />
+        <DiffViewer original="c" modified="d" />
+      </>,
+      { wrapper: Wrapper }
+    )
+    await waitFor(() =>
+      expect(screen.getAllByTestId("mock-diff-editor")).toHaveLength(2)
+    )
+    fireEvent.click(screen.getAllByRole("button", { name: labels.unified })[0])
+    expect(
+      screen
+        .getAllByTestId("mock-diff-editor")
+        .every((e) => e.dataset.sideBySide === "false")
+    ).toBe(true)
+    act(() => {
+      localStorage.setItem("workspace:diff-view-mode", "split")
+      window.dispatchEvent(
+        new StorageEvent("storage", { key: "workspace:diff-view-mode" })
+      )
+    })
+    expect(
+      screen
+        .getAllByTestId("mock-diff-editor")
+        .every((e) => e.dataset.sideBySide === "true")
+    ).toBe(true)
+  })
+})
+
 describe("DiffViewer teardown", () => {
   beforeEach(() => {
     harness.events.length = 0
@@ -117,7 +275,9 @@ describe("DiffViewer teardown", () => {
   })
 
   it("disposes the diff models only after detaching them from the widget", async () => {
-    const { unmount } = render(<DiffViewer original="a" modified="b" />)
+    const { unmount } = render(<DiffViewer original="a" modified="b" />, {
+      wrapper: Wrapper,
+    })
     expect(await screen.findByTestId("mock-diff-editor")).toBeInTheDocument()
 
     unmount()
@@ -149,4 +309,52 @@ describe("DiffViewer teardown", () => {
       "editor:dispose",
     ])
   })
+})
+
+it("synchronizes unchanged-region folding without remounting and keeps it in Unified mode", async () => {
+  const view = render(
+    <>
+      <DiffViewer original="a" modified="b" />
+      <DiffViewer original="c" modified="d" />
+    </>,
+    { wrapper: Wrapper }
+  )
+  await screen.findAllByTestId("mock-diff-editor")
+  fireEvent.click(
+    screen.getAllByRole("button", { name: "Collapse unchanged regions" })[0]
+  )
+  expect(
+    screen
+      .getAllByTestId("mock-diff-editor")
+      .every((e) => e.dataset.collapse === "true")
+  ).toBe(true)
+  fireEvent.click(
+    screen.getAllByRole("button", {
+      name: enMessages.Folder.diffPreview.viewMode.unified,
+    })[0]
+  )
+  expect(
+    screen
+      .getAllByTestId("mock-diff-editor")
+      .every(
+        (e) => e.dataset.collapse === "true" && e.dataset.sideBySide === "false"
+      )
+  ).toBe(true)
+  expect(localStorage.getItem("workspace:diff-collapse-unchanged")).toBe("true")
+  view.unmount()
+  render(<DiffViewer original="e" modified="f" />, { wrapper: Wrapper })
+  expect(await screen.findByTestId("mock-diff-editor")).toHaveAttribute(
+    "data-collapse",
+    "true"
+  )
+  act(() => {
+    localStorage.setItem("workspace:diff-collapse-unchanged", "false")
+    window.dispatchEvent(
+      new StorageEvent("storage", { key: "workspace:diff-collapse-unchanged" })
+    )
+  })
+  expect(screen.getByTestId("mock-diff-editor")).toHaveAttribute(
+    "data-collapse",
+    "false"
+  )
 })

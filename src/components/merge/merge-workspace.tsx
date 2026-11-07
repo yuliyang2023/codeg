@@ -51,6 +51,8 @@ export function MergeWorkspace({
   onAborted,
 }: MergeWorkspaceProps) {
   const t = useTranslations("MergePage")
+  const tWorkbench = useTranslations("Folder.gitWorkbench")
+  const restoring = operation === "stash" || operation === "shelf"
   const [files, setFiles] = useState<string[]>([])
   const [resolvedFiles, setResolvedFiles] = useState<Set<string>>(new Set())
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
@@ -149,6 +151,10 @@ export function MergeWorkspace({
   }
 
   async function handleAbort() {
+    if (restoring) {
+      onAborted()
+      return
+    }
     setAborting(true)
     try {
       await gitAbortOperation(folderPath, operation)
@@ -282,7 +288,7 @@ export function MergeWorkspace({
         >
           {aborting && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
           <X className="mr-1 h-3.5 w-3.5" />
-          {t("abortMerge")}
+          {restoring ? tWorkbench("resolveLater") : t("abortMerge")}
         </Button>
         <Button
           size="sm"
@@ -309,7 +315,7 @@ export function MergeWorkspace({
               <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
             )}
             <CheckCheck className="mr-1 h-3.5 w-3.5" />
-            {t("completeMerge")}
+            {restoring ? tWorkbench("finishRestore") : t("completeMerge")}
           </Button>
         )}
       </div>

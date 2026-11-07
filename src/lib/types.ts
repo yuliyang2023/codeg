@@ -4913,6 +4913,22 @@ export interface GitConflictInfo {
   upstream_commit?: string | null
 }
 
+export interface GitWorkflowResult {
+  message: string
+  conflict?: GitConflictInfo | null
+}
+
+export interface GitAmendInfo {
+  head: string
+  message: string
+  published: boolean
+}
+
+export interface GitAmendResult {
+  head: string
+  index_warning?: string | null
+}
+
 export interface GitPullResult {
   updated_files: number
   conflict?: GitConflictInfo | null
@@ -4982,6 +4998,12 @@ export interface GitStashEntry {
   branch: string
   date: string
   ref_name: string
+}
+
+export interface GitShelfEntry {
+  ref_name: string
+  message: string
+  date: string
 }
 
 export type FileTreeNode =
@@ -5156,7 +5178,23 @@ export interface GitLogResult {
   has_upstream: boolean
 }
 
+export interface GitHistoryOptions {
+  search: string
+  regex: boolean
+  caseSensitive: boolean
+  since: string
+  until: string
+  file: string
+  order: "topo" | "date"
+  firstParent: boolean
+  noMerges: boolean
+  revision: string
+}
+
 export interface GitLogEntry {
+  parents?: string[]
+  refs?: string[]
+  is_head?: boolean
   hash: string
   full_hash: string
   author: string
@@ -6207,4 +6245,140 @@ export interface DeepSeekModelCatalog {
    *  document was understood, so the rows stay editable — but until they are
    *  fixed, sessions run on the agent's built-in catalog instead. */
   invalid: string | null
+}
+
+export interface GitBlameLine {
+  commit: string
+  original_line: number
+  line: number
+  author: string
+  date: string
+  summary: string
+  file: string
+  content: string
+  uncommitted: boolean
+}
+
+export interface GitTag {
+  name: string
+  object: string
+  commit: string
+  annotated: boolean
+  message: string
+  date: string
+}
+
+export interface GitHistoryPlan {
+  head: string
+  base: string
+  parent: string | null
+  published: boolean
+  commits: { hash: string; message: string }[]
+}
+export interface GitHistoryStep {
+  hash: string
+  action: "pick" | "reword" | "squash" | "fixup" | "drop"
+  message?: string
+}
+export interface GitHistoryEditResult {
+  recovery_ref: string
+  conflict: GitConflictInfo | null
+}
+
+export interface GitChangelist {
+  id: string
+  name: string
+  files: string[]
+}
+export interface GitChangelists {
+  revision: number
+  default_id: string
+  lists: GitChangelist[]
+}
+export interface GitSmartState {
+  operation: string
+  target: string
+  saved_ref: string
+  stage: string
+  branch: string | null
+  message: string
+}
+export interface GitSmartResult {
+  message: string
+  pending: boolean
+  saved_ref: string | null
+  conflict: GitConflictInfo | null
+  operation_failed: boolean
+}
+export interface GitFileComparison {
+  original: string
+  modified: string
+  original_label: string
+  modified_label: string
+}
+export interface GitPatchPreview {
+  applicable: boolean
+  summary: string
+  error: string | null
+}
+export interface LocalHistoryEntry {
+  id: string
+  file: string
+  time: string
+  reason: string
+  label: string | null
+  blob: string | null
+  size: number
+}
+export interface LocalHistoryContent {
+  entry: LocalHistoryEntry
+  original: string | null
+  current: string | null
+  current_hash: string | null
+  binary: boolean
+}
+export interface GitConsoleEntry {
+  id: string
+  time: string
+  repository: string
+  command: string[]
+  duration_ms: number
+  exit_code: number | null
+  stdout: string
+  stderr: string
+  truncated: boolean
+}
+
+export interface GitRevisionInfo {
+  hash: string
+  message: string
+  author: string
+  date: string
+  parents: string[]
+  children: string[]
+}
+export interface GitRevisionTreeEntry {
+  name: string
+  file: string
+  kind: string
+  oid: string
+  mode: string
+}
+export interface GitRevisionFile {
+  hash: string
+  file: string
+  content: string | null
+  binary: boolean
+  size: number
+}
+export interface GitRevisionComparison {
+  base: string
+  target: string
+  files: { file: string; status: string }[]
+}
+export interface GitLineHistoryEntry {
+  hash: string
+  author: string
+  date: string
+  message: string
 }

@@ -42,6 +42,7 @@ import {
   CommitMetadata,
   CommitTimestamp,
 } from "@/components/ai-elements/commit"
+import { useSourceEditor } from "@/components/files/source-editor-dialog"
 import { DiffViewer } from "@/components/diff/diff-viewer"
 import { ImageDiffView } from "@/components/diff/image-diff-view"
 import { Button } from "@/components/ui/button"
@@ -304,6 +305,7 @@ export function PushWorkspace({
   // The branch every query below is scoped to. Seeded from the URL, but the
   // window is reused per folder — a second per-branch push raises this same
   // window, so `push://retarget-branch` moves it (see the effect below).
+  const source = useSourceEditor(folderPath)
   const [targetBranch, setTargetBranch] = useState<string | null>(initialBranch)
   // Bumped per commit-list load so a superseded response can't land (see
   // `loadCommits`).
@@ -748,6 +750,9 @@ export function PushWorkspace({
               />
             ) : (
               <DiffViewer
+                onOpenSource={(line) =>
+                  source.open(selectedFile!, line, selectedCommit!)
+                }
                 original={originalContent}
                 modified={modifiedContent}
                 originalLabel={`${selectedCommit.slice(0, 7)}~ (${t("before")})`}
@@ -763,6 +768,7 @@ export function PushWorkspace({
           )}
         </ResizablePanel>
       </ResizablePanelGroup>
+      {source.view}
     </div>
   )
 }

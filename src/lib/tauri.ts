@@ -42,6 +42,7 @@ import type {
   GitCommitResult,
   GitRemote,
   GitStashEntry,
+  GitWorkflowResult,
   PreflightResult,
   FolderCommand,
   TerminalInfo,
@@ -852,7 +853,7 @@ export async function gitStashList(path: string): Promise<GitStashEntry[]> {
 export async function gitStashApply(
   path: string,
   stashRef: string
-): Promise<string> {
+): Promise<GitWorkflowResult> {
   return invoke("git_stash_apply", { path, stashRef })
 }
 

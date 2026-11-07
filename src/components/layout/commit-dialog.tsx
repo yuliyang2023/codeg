@@ -63,7 +63,17 @@ import {
 import type { GitStatusEntry } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
+import { useSourceEditor } from "@/components/files/source-editor-dialog"
+import { Input } from "@/components/ui/input"
+import { GitCommitOptionsPanel } from "./git-commit-options"
+import { gitCommitTools, type GitCommitOptions } from "@/lib/api"
 import { DiffViewer } from "@/components/diff/diff-viewer"
+import {
+  ChangelistFilter,
+  useChangelists,
+  changelistForFile,
+} from "./git-changelists"
+import { AmendCommitDialog } from "@/components/layout/amend-commit-dialog"
 import { ImageDiffView } from "@/components/diff/image-diff-view"
 import { loadImageDiffSides, type ImageDiffSides } from "@/lib/image-diff"
 import { isBinaryImageFile, languageFromPath } from "@/lib/language-detect"
@@ -244,11 +254,42 @@ export function CommitWorkspace({
   onCommitted,
   onCancel,
 }: CommitWorkspaceProps) {
+  const tExtras = useTranslations("Folder.gitExtras")
+  const [commitOptions, setCommitOptions] = useState<GitCommitOptions>({})
+  const [search, setSearch] = useState("")
+  const [groupFilter, setGroupFilter] = useState("all")
+  const tWorkbench = useTranslations("Folder.gitWorkbench")
+  const source = useSourceEditor(folderPath)
+  const [amendOpen, setAmendOpen] = useState(false)
   const t = useTranslations("Folder.commitDialog")
   const tCommon = useTranslations("Folder.common")
   const tGenerate = useTranslations("CommitMessageGeneration")
   const { withCredentialRetry } = useGitCredential()
-  const [entries, setEntries] = useState<GitStatusEntry[]>([])
+  const [allEntries, setEntries] = useState<GitStatusEntry[]>([])
+  const changelists = useChangelists(folderPath)
+  const entries = useMemo(
+    () =>
+      allEntries.filter((entry) => {
+        const inList =
+          changelists.id === "all" ||
+          !changelists.state ||
+          changelistForFile(changelists.state, entry.file, entry.status) ===
+            changelists.id
+        const inGroup =
+          groupFilter === "all" ||
+          (groupFilter === "conflict"
+            ? entry.status.includes("U") || ["AA", "DD"].includes(entry.status)
+            : groupFilter === "untracked"
+              ? entry.status === "??"
+              : entry.status !== "??")
+        return (
+          inList &&
+          inGroup &&
+          entry.file.toLowerCase().includes(search.toLowerCase())
+        )
+      }),
+    [allEntries, changelists.id, changelists.state, search, groupFilter]
+  )
   const containerRef = useRef<HTMLDivElement>(null)
   const [containerWidth, setContainerWidth] = useState(0)
   const [selected, setSelected] = useState<Set<string>>(new Set())
@@ -285,8 +326,17 @@ export function CommitWorkspace({
   // Use refs to track mutable values without causing callback recreation
   const diffFileRef = useRef(diffFile)
   diffFileRef.current = diffFile
-  const selectedRef = useRef(selected)
-  selectedRef.current = selected
+  const visibleSelected = useMemo(
+    () =>
+      new Set(
+        entries
+          .filter((entry) => selected.has(entry.file))
+          .map((entry) => entry.file)
+      ),
+    [entries, selected]
+  )
+  const selectedRef = useRef(visibleSelected)
+  selectedRef.current = visibleSelected
   const entriesRef = useRef(entries)
   entriesRef.current = entries
 
@@ -458,7 +508,10 @@ export function CommitWorkspace({
 
   const toggleAll = useCallback(() => {
     setSelected((prev) => {
-      if (prev.size === entries.length) {
+      if (
+        entries.length > 0 &&
+        entries.every((entry) => prev.has(entry.file))
+      ) {
         return new Set<string>()
       }
       return new Set(entries.map((entry) => entry.file))
@@ -489,15 +542,18 @@ export function CommitWorkspace({
   const handleCommit = useCallback(
     async (andPush?: boolean) => {
       const commitMessage = messageRef.current.trim()
-      if (!commitMessage || selected.size === 0 || !folderPath) return
+      if (!commitMessage || visibleSelected.size === 0 || !folderPath) return
       setCommitting(true)
       setError(null)
       try {
         const result = await gitCommit(
           folderPath,
           commitMessage,
-          Array.from(selected),
-          folderId
+          Array.from(selected).filter((file) =>
+            entries.some((entry) => entry.file === file)
+          ),
+          folderId,
+          commitOptions
         )
         toast.success(t("toasts.commitCompleted"), {
           description: t("toasts.committedFiles", {
@@ -527,7 +583,17 @@ export function CommitWorkspace({
         setCommitting(false)
       }
     },
-    [folderId, folderPath, onCommitted, selected, t, withCredentialRetry]
+    [
+      folderId,
+      commitOptions,
+      folderPath,
+      onCommitted,
+      selected,
+      entries,
+      visibleSelected.size,
+      t,
+      withCredentialRetry,
+    ]
   )
 
   // --- Context menu actions ---
@@ -731,8 +797,8 @@ export function CommitWorkspace({
   }, [])
 
   const allSelected = useMemo(
-    () => entries.length > 0 && selected.size === entries.length,
-    [entries.length, selected.size]
+    () => entries.length > 0 && visibleSelected.size === entries.length,
+    [entries.length, visibleSelected.size]
   )
   const trackedAllSelected = useMemo(
     () =>
@@ -766,11 +832,13 @@ export function CommitWorkspace({
   // message describes.
   const generateDisabledReason = committing
     ? tGenerate("busyCommitting")
-    : selected.size === 0
+    : visibleSelected.size === 0
       ? tGenerate("selectFiles")
       : null
   const handleGenerate = useCallback(async () => {
-    const files = Array.from(selected)
+    const files = Array.from(selected).filter((file) =>
+      entries.some((entry) => entry.file === file)
+    )
     const generated = await generation.generate({
       files,
       draft: messageRef.current,
@@ -790,7 +858,7 @@ export function CommitWorkspace({
       return
     }
     await handleCommit()
-  }, [generation, handleCommit, selected, tGenerate])
+  }, [generation, handleCommit, selected, entries, tGenerate])
 
   useEffect(() => {
     const container = containerRef.current
@@ -917,6 +985,44 @@ export function CommitWorkspace({
             </FileTreeFile>
           </ContextMenuTrigger>
           <ContextMenuContent>
+            <ContextMenuItem
+              onSelect={() =>
+                void gitCommitTools(folderPath, "ignore", {
+                  files: [
+                    node.path.includes(" -> ")
+                      ? node.path.slice(node.path.lastIndexOf(" -> ") + 4)
+                      : node.path,
+                  ],
+                })
+                  .then(() => loadStatus())
+                  .catch((e) => toast.error(toErrorMessage(e)))
+              }
+            >
+              {tExtras("ignore")}
+            </ContextMenuItem>
+            <ContextMenuItem
+              onSelect={() =>
+                setConfirm({
+                  open: true,
+                  title: tExtras("untrack"),
+                  description: tExtras("untrackHint"),
+                  variant: "destructive",
+                  action: () => {
+                    void gitCommitTools(folderPath, "untrack", {
+                      files: [
+                        node.path.includes(" -> ")
+                          ? node.path.slice(node.path.lastIndexOf(" -> ") + 4)
+                          : node.path,
+                      ],
+                    })
+                      .then(() => loadStatus())
+                      .catch((e) => toast.error(toErrorMessage(e)))
+                  },
+                })
+              }
+            >
+              {tExtras("untrack")}
+            </ContextMenuItem>
             {!isDeleted && (
               <ContextMenuItem onClick={() => handleRollbackFile(node.path)}>
                 {t("actions.rollback")}
@@ -940,6 +1046,9 @@ export function CommitWorkspace({
       handleRollbackDir,
       handleDeleteFile,
       handleDeleteDir,
+      folderPath,
+      loadStatus,
+      tExtras,
       t,
       tCommon,
     ]
@@ -1018,6 +1127,21 @@ export function CommitWorkspace({
             </FileTreeFile>
           </ContextMenuTrigger>
           <ContextMenuContent>
+            <ContextMenuItem
+              onSelect={() =>
+                void gitCommitTools(folderPath, "ignore", {
+                  files: [
+                    node.path.includes(" -> ")
+                      ? node.path.slice(node.path.lastIndexOf(" -> ") + 4)
+                      : node.path,
+                  ],
+                })
+                  .then(() => loadStatus())
+                  .catch((e) => toast.error(toErrorMessage(e)))
+              }
+            >
+              {tExtras("ignore")}
+            </ContextMenuItem>
             <ContextMenuItem onClick={() => handleAddToVcs(node.path)}>
               {t("actions.addToVcs")}
             </ContextMenuItem>
@@ -1040,6 +1164,9 @@ export function CommitWorkspace({
       handleAddDirToVcs,
       handleDeleteFile,
       handleDeleteDir,
+      folderPath,
+      loadStatus,
+      tExtras,
       t,
       tCommon,
     ]
@@ -1061,11 +1188,31 @@ export function CommitWorkspace({
   return (
     <div
       ref={containerRef}
-      className="flex h-full min-h-0 overflow-hidden rounded-lg border bg-card"
+      className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border bg-card"
     >
+      <div className="flex shrink-0 gap-2 border-b p-2">
+        <Input
+          aria-label={tExtras("search")}
+          placeholder={tExtras("search")}
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+        <select
+          aria-label={tExtras("grouping")}
+          value={groupFilter}
+          onChange={(e) => setGroupFilter(e.target.value)}
+          className="rounded border bg-background text-xs"
+        >
+          {(["all", "tracked", "untracked", "conflict"] as const).map((key) => (
+            <option key={key} value={key}>
+              {tExtras(key)}
+            </option>
+          ))}
+        </select>
+      </div>
       <ResizablePanelGroup
         direction="horizontal"
-        className="h-full min-h-0 min-w-0"
+        className="flex-1 min-h-0 min-w-0"
       >
         <ResizablePanel
           defaultSize={leftDefaultSize}
@@ -1079,6 +1226,7 @@ export function CommitWorkspace({
               </div>
             )}
 
+            <ChangelistFilter model={changelists} />
             <div className="flex h-9 items-center gap-2 border-b bg-muted/50 px-3">
               <button
                 type="button"
@@ -1101,7 +1249,7 @@ export function CommitWorkspace({
                 {loadingStatus
                   ? t("loading")
                   : t("selectionCount", {
-                      selected: selected.size,
+                      selected: visibleSelected.size,
                       total: entries.length,
                     })}
               </span>
@@ -1302,6 +1450,16 @@ export function CommitWorkspace({
                   </Button>
                 </div>
               </div>
+              <GitCommitOptionsPanel
+                path={folderPath}
+                value={commitOptions}
+                onChange={setCommitOptions}
+                onMessage={(value) => {
+                  messageRef.current = value
+                  if (messageBoxRef.current) messageBoxRef.current.value = value
+                  setHasMessage(!!value.trim())
+                }}
+              />
               <Textarea
                 key={messageInputKey}
                 ref={messageBoxRef}
@@ -1323,6 +1481,13 @@ export function CommitWorkspace({
                 folderId={projectFolderId ?? folderId ?? null}
               />
               <div className="mt-3 flex items-center justify-end gap-2">
+                <Button
+                  variant="outline"
+                  disabled={committing || generating}
+                  onClick={() => setAmendOpen(true)}
+                >
+                  {tWorkbench("amend")}
+                </Button>
                 <Button variant="outline" onClick={onCancel}>
                   {tCommon("cancel")}
                 </Button>
@@ -1332,7 +1497,7 @@ export function CommitWorkspace({
                       committing ||
                       generating ||
                       !hasMessage ||
-                      selected.size === 0
+                      visibleSelected.size === 0
                     }
                     onClick={() => handleCommit()}
                     className="rounded-r-none"
@@ -1340,7 +1505,7 @@ export function CommitWorkspace({
                     {committing && (
                       <Loader2 className="mr-1 h-4 w-4 animate-spin" />
                     )}
-                    {t("commitButton", { count: selected.size })}
+                    {t("commitButton", { count: visibleSelected.size })}
                   </Button>
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
@@ -1349,7 +1514,7 @@ export function CommitWorkspace({
                           committing ||
                           generating ||
                           !hasMessage ||
-                          selected.size === 0
+                          visibleSelected.size === 0
                         }
                         className="rounded-l-none border-l border-l-primary-foreground/20 px-1.5"
                       >
@@ -1359,12 +1524,12 @@ export function CommitWorkspace({
                     <DropdownMenuContent align="end">
                       <DropdownMenuItem onClick={() => handleCommit()}>
                         <Check className="h-4 w-4" />
-                        {t("commitButton", { count: selected.size })}
+                        {t("commitButton", { count: visibleSelected.size })}
                       </DropdownMenuItem>
                       <DropdownMenuItem onClick={() => handleCommit(true)}>
                         <Upload className="h-4 w-4" />
                         {t("commitAndPushButton", {
-                          count: selected.size,
+                          count: visibleSelected.size,
                         })}
                       </DropdownMenuItem>
                     </DropdownMenuContent>
@@ -1416,6 +1581,7 @@ export function CommitWorkspace({
               />
             ) : (
               <DiffViewer
+                onOpenSource={(line) => source.open(diffFile!, line)}
                 key={diffFile}
                 original={diffOriginal}
                 modified={diffModified}
@@ -1428,7 +1594,15 @@ export function CommitWorkspace({
           </div>
         </ResizablePanel>
       </ResizablePanelGroup>
+      {source.view}
 
+      <AmendCommitDialog
+        key={folderPath}
+        path={folderPath}
+        open={amendOpen}
+        onOpenChange={setAmendOpen}
+        onCompleted={() => onCommitted?.()}
+      />
       <AlertDialog
         open={confirm.open}
         onOpenChange={(open) => {

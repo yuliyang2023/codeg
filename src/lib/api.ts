@@ -156,6 +156,11 @@ import type {
   GeneratedCommitMessage,
   GitRemote,
   GitStashEntry,
+  GitWorkflowResult,
+  GitConflictInfo,
+  GitAmendInfo,
+  GitAmendResult,
+  GitShelfEntry,
   PreflightResult,
   FolderCommand,
   TerminalInfo,
@@ -3037,12 +3042,14 @@ export async function openPushWindow(
 export async function gitStashPush(
   path: string,
   message?: string,
-  keepIndex?: boolean
+  keepIndex?: boolean,
+  includeUntracked?: boolean
 ): Promise<string> {
   return getTransport().call("git_stash_push", {
     path,
     message: message ?? null,
     keepIndex: keepIndex ?? false,
+    includeUntracked: includeUntracked ?? false,
   })
 }
 
@@ -3060,11 +3067,87 @@ export async function gitStashList(path: string): Promise<GitStashEntry[]> {
   return getTransport().call("git_stash_list", { path })
 }
 
+export async function gitShelfList(path: string): Promise<GitShelfEntry[]> {
+  return getTransport().call("git_shelf_list", { path })
+}
+
+export async function gitShelfSave(
+  path: string,
+  message: string,
+  files?: string[]
+): Promise<void> {
+  return getTransport().call("git_shelf_save", {
+    path,
+    message,
+    files: files ?? null,
+  })
+}
+
+export async function gitShelfApply(
+  path: string,
+  shelfRef: string
+): Promise<GitWorkflowResult> {
+  return getTransport().call("git_shelf_apply", { path, shelfRef })
+}
+
+export async function gitShelfDrop(
+  path: string,
+  shelfRef: string
+): Promise<void> {
+  return getTransport().call("git_shelf_drop", { path, shelfRef })
+}
+
+export async function gitShelfDiff(
+  path: string,
+  shelfRef: string
+): Promise<string> {
+  return getTransport().call("git_shelf_diff", { path, shelfRef })
+}
+
 export async function gitStashApply(
   path: string,
   stashRef: string
-): Promise<string> {
+): Promise<GitWorkflowResult> {
   return getTransport().call("git_stash_apply", { path, stashRef })
+}
+
+export async function gitCommitAction(
+  path: string,
+  commit: string,
+  operation: "cherry-pick" | "revert"
+): Promise<GitWorkflowResult> {
+  return getTransport().call("git_commit_action", { path, commit, operation })
+}
+
+export async function gitAmendInfo(path: string): Promise<GitAmendInfo> {
+  return getTransport().call("git_amend_info", { path })
+}
+
+export async function gitAmend(
+  path: string,
+  message: string,
+  files: string[],
+  expectedHead: string
+): Promise<GitAmendResult> {
+  return getTransport().call("git_amend", {
+    path,
+    message,
+    files,
+    expectedHead,
+  })
+}
+
+export async function gitOperationState(
+  path: string
+): Promise<GitConflictInfo | null> {
+  return getTransport().call("git_operation_state", { path })
+}
+
+export async function gitSkipOperation(
+  path: string,
+  operation: string
+): Promise<GitWorkflowResult> {
+  return getTransport().call("git_skip_operation", { path, operation })
 }
 
 export async function gitStashDrop(
@@ -3199,13 +3282,15 @@ export async function gitCommit(
   path: string,
   message: string,
   files: string[],
-  folderId?: number | null
+  folderId?: number | null,
+  options?: GitCommitOptions
 ): Promise<GitCommitResult> {
   return getTransport().call("git_commit", {
     path,
     message,
     files,
     folderId: folderId ?? null,
+    options: options ?? null,
   })
 }
 
@@ -5192,8 +5277,15 @@ export async function gitLog(
   skip?: number,
   author?: string,
   allBranches?: boolean,
-  withFiles?: boolean
+  withFiles?: boolean,
+  history?: import("./types").GitHistoryOptions
 ): Promise<GitLogResult> {
+  if (history) {
+    return getTransport().call("git_history", {
+      path,
+      query: { ...history, limit, branch, skip, author, allBranches },
+    })
+  }
   return getTransport().call("git_log", {
     path,
     limit: limit ?? null,
@@ -6662,4 +6754,350 @@ export async function forgeAutoScanNow(
   folderId: number
 ): Promise<ForgeAutoScanReport> {
   return getTransport().call("forge_auto_scan_now", { folderId })
+}
+
+export function gitFileHistory(
+  path: string,
+  file: string,
+  skip = 0,
+  revision = "HEAD"
+): Promise<GitLogResult> {
+  return getTransport().call("git_history", {
+    path,
+    query: { file, follow: true, skip, limit: 100, revision },
+  })
+}
+
+export function gitBlame(
+  path: string,
+  file: string,
+  revision?: string
+): Promise<import("./types").GitBlameLine[]> {
+  return getTransport().call("git_blame", {
+    path,
+    file,
+    revision: revision ?? null,
+  })
+}
+
+export function gitTags(path: string): Promise<import("./types").GitTag[]> {
+  return getTransport().call("git_tags", { path })
+}
+export function gitTagCreate(
+  path: string,
+  name: string,
+  revision: string,
+  message?: string
+): Promise<string> {
+  return getTransport().call("git_tag_create", {
+    path,
+    name,
+    revision,
+    message: message ?? null,
+  })
+}
+export function gitTagAction(
+  path: string,
+  tag: import("./types").GitTag,
+  operation: string,
+  remote?: string
+): Promise<GitWorkflowResult> {
+  return getTransport().call("git_tag_action", {
+    path,
+    name: tag.name,
+    expectedObject: tag.object,
+    operation,
+    remote: remote ?? null,
+  })
+}
+
+export function gitHistoryPlan(
+  path: string,
+  base: string
+): Promise<import("./types").GitHistoryPlan> {
+  return getTransport().call("git_history_plan", { path, base })
+}
+export function gitHistoryEdit(
+  path: string,
+  plan: import("./types").GitHistoryPlan,
+  steps: import("./types").GitHistoryStep[],
+  allowPublished: boolean
+): Promise<import("./types").GitHistoryEditResult> {
+  return getTransport().call("git_history_edit", {
+    path,
+    base: plan.base,
+    expectedHead: plan.head,
+    steps,
+    allowPublished,
+  })
+}
+export function gitUndoCommit(
+  path: string,
+  expectedHead: string,
+  allowPublished: boolean
+): Promise<GitWorkflowResult> {
+  return getTransport().call("git_undo_commit", {
+    path,
+    expectedHead,
+    allowPublished,
+  })
+}
+
+export function gitChangelists(
+  path: string
+): Promise<import("./types").GitChangelists> {
+  return getTransport().call("git_changelists", { path })
+}
+export function gitChangelistUpdate(
+  path: string,
+  expectedRevision: number,
+  operation: string,
+  values: { id?: string; name?: string; files?: string[] } = {}
+): Promise<import("./types").GitChangelists> {
+  return getTransport().call("git_changelist_update", {
+    path,
+    expectedRevision,
+    operation,
+    id: values.id ?? null,
+    name: values.name ?? null,
+    files: values.files ?? null,
+  })
+}
+export function gitSmartState(
+  path: string
+): Promise<import("./types").GitSmartState | null> {
+  return getTransport().call("git_smart_state", { path })
+}
+export function gitSmartRun(
+  path: string,
+  operation: string,
+  target: string
+): Promise<import("./types").GitSmartResult> {
+  return getTransport().call("git_smart_run", { path, operation, target })
+}
+export function gitSmartResume(
+  path: string,
+  finishManual = false
+): Promise<import("./types").GitSmartResult> {
+  return getTransport().call("git_smart_resume", { path, finishManual })
+}
+export function gitCompareFile(
+  path: string,
+  file: string,
+  base: string,
+  target: string
+): Promise<import("./types").GitFileComparison> {
+  return getTransport().call("git_compare_file", { path, file, base, target })
+}
+export function gitPatchCreate(path: string, files: string[]): Promise<string> {
+  return getTransport().call("git_patch_create", { path, files })
+}
+export function gitPatchPreview(
+  path: string,
+  patch: string,
+  reverse: boolean,
+  stage: boolean
+): Promise<import("./types").GitPatchPreview> {
+  return getTransport().call("git_patch_preview", {
+    path,
+    patch,
+    reverse,
+    stage,
+  })
+}
+export function gitPatchApply(
+  path: string,
+  patch: string,
+  reverse: boolean,
+  stage: boolean
+): Promise<string> {
+  return getTransport().call("git_patch_apply", { path, patch, reverse, stage })
+}
+export function localHistoryCapture(
+  path: string,
+  file?: string,
+  label?: string
+): Promise<number> {
+  return getTransport().call("local_history_capture", {
+    path,
+    file: file ?? null,
+    label: label ?? null,
+  })
+}
+export function localHistoryList(
+  path: string,
+  file?: string
+): Promise<import("./types").LocalHistoryEntry[]> {
+  return getTransport().call("local_history_list", { path, file: file ?? null })
+}
+export function localHistoryContent(
+  path: string,
+  id: string
+): Promise<import("./types").LocalHistoryContent> {
+  return getTransport().call("local_history_content", { path, id })
+}
+export function localHistoryRestore(
+  path: string,
+  id: string,
+  expectedHash: string | null
+): Promise<void> {
+  return getTransport().call("local_history_restore", {
+    path,
+    id,
+    expectedHash,
+  })
+}
+export function gitConsoleList(
+  path: string
+): Promise<import("./types").GitConsoleEntry[]> {
+  return getTransport().call("git_console_list", { path })
+}
+export function gitConsoleClear(path: string): Promise<void> {
+  return getTransport().call("git_console_clear", { path })
+}
+
+export function gitRevisionInfo(
+  path: string,
+  revision: string
+): Promise<import("./types").GitRevisionInfo> {
+  return getTransport().call("git_revision_info", { path, revision })
+}
+export function gitRevisionTree(
+  path: string,
+  revision: string,
+  directory = ""
+): Promise<import("./types").GitRevisionTreeEntry[]> {
+  return getTransport().call("git_revision_tree", { path, revision, directory })
+}
+export function gitRevisionFile(
+  path: string,
+  revision: string,
+  file: string
+): Promise<import("./types").GitRevisionFile> {
+  return getTransport().call("git_revision_file", { path, revision, file })
+}
+export function gitRevisionCompare(
+  path: string,
+  base: string,
+  target: string
+): Promise<import("./types").GitRevisionComparison> {
+  return getTransport().call("git_revision_compare", { path, base, target })
+}
+export function gitRevisionCheckout(
+  path: string,
+  revision: string,
+  expectedHead: string
+): Promise<string> {
+  return getTransport().call("git_revision_checkout", {
+    path,
+    revision,
+    expectedHead,
+  })
+}
+export function gitSourceLine(
+  path: string,
+  file: string,
+  revision: string,
+  line: number
+): Promise<number> {
+  return getTransport().call("git_source_line", { path, file, revision, line })
+}
+export function gitLineHistory(
+  path: string,
+  file: string,
+  start: number,
+  end: number,
+  revision?: string,
+  skip = 0
+): Promise<import("./types").GitLineHistoryEntry[]> {
+  return getTransport().call("git_line_history", {
+    path,
+    file,
+    start,
+    end,
+    revision: revision ?? null,
+    skip,
+  })
+}
+
+export interface GitCommitOptions {
+  author?: string
+  signoff?: boolean
+  signing?: "default" | "signed" | "unsigned"
+  signingKey?: string
+  skipHooks?: boolean
+}
+export interface GitCommitToolsState {
+  messages: string[]
+  shelves: Record<string, { name: string; group: string }>
+}
+export function gitCommitTools(
+  path: string,
+  operation: "state"
+): Promise<GitCommitToolsState>
+export function gitCommitTools(
+  path: string,
+  operation: "shelf-paths",
+  options: { shelfRef: string }
+): Promise<string[]>
+export function gitCommitTools(
+  path: string,
+  operation: "ignore" | "untrack" | "shelf-meta" | "shelf-restore",
+  options: {
+    files?: string[]
+    shelfRef?: string
+    name?: string
+    group?: string
+  }
+): Promise<void>
+export function gitCommitTools(
+  path: string,
+  operation: string,
+  options: object = {}
+): Promise<unknown> {
+  return getTransport().call("git_commit_tools", {
+    path,
+    operation,
+    ...options,
+  })
+}
+
+export interface GitHistoryAdvancedRequest {
+  operation: "inspect" | "cherry-pick" | "revert" | "reword-merges" | "split"
+  commits: string[]
+  expectedHead?: string
+  mainline?: number
+  allowPublished?: boolean
+  messages?: Record<string, string>
+  files?: string[]
+  secondMessage?: string
+}
+export interface GitHistoryAdvancedReview {
+  head: string
+  published: boolean
+  commits: {
+    hash: string
+    parents: string[]
+    message: string
+    files: string[]
+  }[]
+}
+export function gitHistoryAdvanced(
+  path: string,
+  request: GitHistoryAdvancedRequest & { operation: "inspect" }
+): Promise<GitHistoryAdvancedReview>
+export function gitHistoryAdvanced(
+  path: string,
+  request: GitHistoryAdvancedRequest
+): Promise<{
+  recovery_ref?: string
+  head?: string
+  conflict: import("./types").GitConflictInfo | null
+  message?: string
+}>
+export function gitHistoryAdvanced(
+  path: string,
+  request: GitHistoryAdvancedRequest
+): Promise<unknown> {
+  return getTransport().call("git_history_advanced", { path, request })
 }

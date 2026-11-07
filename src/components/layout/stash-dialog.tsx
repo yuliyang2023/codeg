@@ -34,6 +34,8 @@ export function StashDialog({
   onStashed,
 }: StashDialogProps) {
   const t = useTranslations("Folder.branchDropdown.stashDialog")
+  const tExtras = useTranslations("Folder.gitExtras")
+  const [includeUntracked, setIncludeUntracked] = useState(false)
   const ime = useImeGuard()
   const [message, setMessage] = useState("")
   const [keepIndex, setKeepIndex] = useState(false)
@@ -43,16 +45,23 @@ export function StashDialog({
     if (loading) return
     setMessage("")
     setKeepIndex(false)
+    setIncludeUntracked(false)
     onClose()
   }
 
   async function handleStash() {
     setLoading(true)
     try {
-      await gitStashPush(folderPath, message.trim() || undefined, keepIndex)
+      await gitStashPush(
+        folderPath,
+        message.trim() || undefined,
+        keepIndex,
+        includeUntracked
+      )
       toast.success(t("success"))
       setMessage("")
       setKeepIndex(false)
+      setIncludeUntracked(false)
       onStashed()
       onClose()
     } catch (err) {
@@ -101,6 +110,15 @@ export function StashDialog({
           </div>
         </div>
 
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={includeUntracked}
+            disabled={loading}
+            onChange={(e) => setIncludeUntracked(e.target.checked)}
+          />
+          {tExtras("includeUntracked")}
+        </label>
         <DialogFooter>
           <Button
             variant="outline"

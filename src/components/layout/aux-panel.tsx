@@ -35,7 +35,7 @@ import { ChromeReserve } from "./chrome-reserve"
 import { SessionDetailsTab } from "./aux-panel-session-details-tab"
 import { FileTreeTab } from "./aux-panel-file-tree-tab"
 import { GitChangesTab } from "./aux-panel-git-changes-tab"
-import { GitLogTab } from "./aux-panel-git-log-tab"
+import { GitWorkbenchTab } from "./git-workbench-tab"
 import { AutomationsAuxTab } from "./aux-panel-automations-tab"
 import { TasksAuxTab } from "./aux-panel-tasks-tab"
 import { ForgeAuxTab } from "./aux-panel-forge-tab"
@@ -226,7 +226,7 @@ export function AuxPanel() {
         forceMount
         className="mt-0 flex-1 min-h-0 overflow-hidden"
       >
-        {mountedTabs.has("git_log") ? <GitLogTab /> : null}
+        {mountedTabs.has("git_log") ? <GitWorkbenchTab /> : null}
       </TabsContent>
       <TabsContent
         value="automations"

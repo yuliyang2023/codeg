@@ -1,5 +1,7 @@
 "use client"
 
+import { GitFileHistoryProvider, GitFileHistoryMenu } from "./git-file-history"
+
 import {
   type ReactElement,
   useCallback,
@@ -80,6 +82,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
+import { gitCommitAction } from "@/lib/api"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import {
   Popover,
@@ -131,6 +134,16 @@ import type {
 import { toast } from "sonner"
 import { isNotAGitRepoError, toErrorMessage } from "@/lib/app-error"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { GitRevisionBrowser } from "./git-revision-browser"
+import { GitHistoryAdvancedDialog } from "./git-history-advanced-dialog"
+import { GitHistoryEditDialog } from "./git-history-edit-dialog"
+import { buildHistoryGraph, HistoryGraphRail } from "./git-history-graph"
+import {
+  DEFAULT_HISTORY_OPTIONS,
+  GitHistoryFilters,
+  loadHistoryOptions,
+  saveHistoryOptions,
+} from "./git-history-filters"
 
 // Commits load in pages of PAGE_SIZE via the backend `skip` offset; the next
 // page is fetched once the scroll comes within LOAD_MORE_PX of the estimated
@@ -673,6 +686,7 @@ function CommitFilesTree({
           >
             {tCommon("viewDiff")}
           </ContextMenuItem>
+          <GitFileHistoryMenu file={file.path} revision={commitHash} />
           <ContextMenuItem
             onSelect={() => {
               void onOpenFilePreview(file.path)
@@ -1292,7 +1306,32 @@ function LogHeader({
   )
 }
 
-export function GitLogTab() {
+function GitLogTabContent({ refreshToken }: { refreshToken: number }) {
+  const tAdvanced = useTranslations("Folder.gitAdvanced")
+  const [selectedHistory, setSelectedHistory] = useState<Set<string>>(new Set())
+  const [selectionAnchor, setSelectionAnchor] = useState<string | null>(null)
+  const [advanced, setAdvanced] = useState<{
+    path: string
+    commits: string[]
+    operation?: "cherry-pick" | "revert"
+  } | null>(null)
+  const [revisionTarget, setRevisionTarget] = useState<{
+    path: string
+    revision: string
+  } | null>(null)
+  const tRevision = useTranslations("Folder.gitRevision")
+  const tWorkbench = useTranslations("Folder.gitWorkbench")
+  const [commitAction, setCommitAction] = useState<{
+    path: string
+    hash: string
+    operation: "cherry-pick" | "revert"
+  } | null>(null)
+  const [editTarget, setEditTarget] = useState<{
+    path: string
+    base: string
+    undo: boolean
+  } | null>(null)
+  const tEdit = useTranslations("Folder.gitHistoryEdit")
   const ime = useImeGuard()
   const t = useTranslations("Folder.gitLogTab")
   const tCommon = useTranslations("Folder.common")
@@ -1311,10 +1350,17 @@ export function GitLogTab() {
   // folder (openers default to it when folderId is omitted — see
   // resolveTargetFolder). Clears the instant the deferred render catches up.
   const folderStale = activeFolder?.id !== folder?.id
+  useEffect(() => {
+    setEditTarget(null)
+    setAdvanced(null)
+    setSelectedHistory(new Set())
+    setSelectionAnchor(null)
+  }, [activeFolder?.id])
   const { openCommitDiff, openFilePreview } = useWorkspaceActions()
   const workspaceState = useWorkspaceStateStore(folder?.path ?? null)
   const isGitRepo = workspaceState.isGitRepo
   const [entries, setEntries] = useState<GitLogEntry[]>([])
+  const [historyOptions, setHistoryOptions] = useState(DEFAULT_HISTORY_OPTIONS)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -1354,6 +1400,32 @@ export function GitLogTab() {
   const [meName, setMeName] = useState<string | null>(null)
   const [recentAuthors, setRecentAuthors] = useState<string[]>([])
   const [selectedAuthor, setSelectedAuthor] = useState<string | null>(null)
+  const graphRows = useMemo(
+    () =>
+      buildHistoryGraph(
+        entries,
+        !!(
+          historyOptions.search ||
+          historyOptions.file ||
+          historyOptions.since ||
+          historyOptions.until ||
+          historyOptions.noMerges ||
+          historyOptions.firstParent ||
+          selectedAuthor
+        )
+      ),
+    [entries, historyOptions, selectedAuthor]
+  )
+  const graphWidth = useMemo(
+    () =>
+      Math.max(
+        21,
+        ...graphRows.map(
+          (row) => Math.max(row.before.length, row.after.length) * 12 + 6
+        )
+      ),
+    [graphRows]
+  )
 
   // The folder path whose persisted selection is currently applied. When the
   // (deferred) folder changes we restore that folder's saved branch/author
@@ -1372,6 +1444,7 @@ export function GitLogTab() {
       : { branch: null, author: null }
     setSelectedBranch(restored.branch)
     setSelectedAuthor(restored.author)
+    setHistoryOptions(loadHistoryOptions(currentSelectionPath))
   }
   // Mirror the live selection into refs so refreshBranches (keyed only on the
   // folder path) can validate/persist against the latest values without being
@@ -1454,6 +1527,7 @@ export function GitLogTab() {
   // leaks into the new query.
   useEffect(() => {
     setNewBranchTarget(null)
+    setCommitAction(null)
     setResetTarget(null)
     setManageRemotesOpen(false)
   }, [activeFolder?.id])
@@ -1711,7 +1785,8 @@ export function GitLogTab() {
           0,
           selectedAuthor ?? undefined,
           branch === null,
-          false
+          false,
+          historyOptions
         )
         if (gen !== logGenRef.current) return
         setEntries(result.entries)
@@ -1769,12 +1844,19 @@ export function GitLogTab() {
         }
       }
     },
-    [folder?.path, selectedBranch, selectedAuthor]
+    [folder?.path, selectedBranch, selectedAuthor, historyOptions]
   )
 
   useEffect(() => {
     setNotAGitRepo(false)
   }, [folder?.path])
+
+  const lastRefreshToken = useRef(refreshToken)
+  useEffect(() => {
+    if (lastRefreshToken.current === refreshToken) return
+    lastRefreshToken.current = refreshToken
+    void fetchLog({ inline: true })
+  }, [refreshToken, fetchLog])
 
   const handleRefresh = useCallback(() => {
     void fetchLog({ inline: true })
@@ -1806,7 +1888,8 @@ export function GitLogTab() {
         skip,
         selectedAuthor ?? undefined,
         selectedBranch === null,
-        false
+        false,
+        historyOptions
       )
       if (gen !== logGenRef.current) return
       const next = [...entriesRef.current, ...result.entries]
@@ -1825,7 +1908,7 @@ export function GitLogTab() {
       loadingMoreRef.current = false
       setLoadingMore(false)
     }
-  }, [folder?.path, selectedBranch, selectedAuthor])
+  }, [folder?.path, selectedBranch, selectedAuthor, historyOptions])
 
   // virtua reports the scroll offset each frame; fetch the next page once the
   // window nears the estimated end.
@@ -2171,6 +2254,27 @@ export function GitLogTab() {
             its dialogs have to mount here too. */}
         {gitActions.dialogs}
         {remoteManageDialog}
+        {advanced && (
+          <GitHistoryAdvancedDialog
+            path={advanced.path}
+            commits={advanced.commits}
+            initialOperation={advanced.operation}
+            onClose={() => setAdvanced(null)}
+            onCompleted={() => {
+              setSelectedHistory(new Set())
+              void fetchLog({ inline: true })
+            }}
+            onConflict={gitActions.reportConflict}
+          />
+        )}
+        {revisionTarget && (
+          <GitRevisionBrowser
+            path={revisionTarget.path}
+            initialRevision={revisionTarget.revision}
+            onClose={() => setRevisionTarget(null)}
+            onChanged={() => void fetchLog({ inline: true })}
+          />
+        )}
       </div>
     )
   }
@@ -2220,6 +2324,41 @@ export function GitLogTab() {
         gitActions={gitActions}
         gitActionsStale={folderStale}
         onManageRemotes={() => setManageRemotesOpen(true)}
+      />
+      {selectedHistory.size > 0 && (
+        <div className="flex items-center gap-2 border-b p-2 text-xs">
+          <span>{tAdvanced("selected", { count: selectedHistory.size })}</span>
+          <Button
+            size="xs"
+            disabled={folderStale || gitActions.running}
+            onClick={() => {
+              if (folder)
+                setAdvanced({
+                  path: folder.path,
+                  commits: entries
+                    .filter((e) => selectedHistory.has(e.full_hash))
+                    .map((e) => e.full_hash),
+                })
+            }}
+          >
+            {tAdvanced("title")}
+          </Button>
+          <Button
+            size="xs"
+            variant="ghost"
+            onClick={() => setSelectedHistory(new Set())}
+          >
+            {tAdvanced("clear")}
+          </Button>
+        </div>
+      )}
+      <GitHistoryFilters
+        key={`filters:${folder?.path}`}
+        value={historyOptions}
+        onChange={(value) => {
+          setHistoryOptions(value)
+          saveHistoryOptions(folder?.path ?? null, value)
+        }}
       />
       {error ? (
         <ScrollArea className="min-h-0 flex-1 px-3 py-3">
@@ -2282,7 +2421,41 @@ export function GitLogTab() {
                     const isOpen = !!openByCommit[commitKey]
 
                     return (
-                      <div key={entry.full_hash}>
+                      <div key={entry.full_hash} className="flex">
+                        <input
+                          type="checkbox"
+                          className="m-1 shrink-0 self-start"
+                          aria-label={tAdvanced("select", { hash: entry.hash })}
+                          checked={selectedHistory.has(entry.full_hash)}
+                          disabled={folderStale || gitActions.running}
+                          onChange={() => {}}
+                          onClick={(event) => {
+                            setSelectedHistory((previous) => {
+                              const next = new Set(previous)
+                              if (event.shiftKey && selectionAnchor) {
+                                const a = entries.findIndex(
+                                  (e) => e.full_hash === selectionAnchor
+                                )
+                                if (a >= 0) {
+                                  for (const row of entries.slice(
+                                    Math.min(a, index),
+                                    Math.max(a, index) + 1
+                                  ))
+                                    next.add(row.full_hash)
+                                }
+                              } else if (next.has(entry.full_hash))
+                                next.delete(entry.full_hash)
+                              else next.add(entry.full_hash)
+                              return next
+                            })
+                            setSelectionAnchor(entry.full_hash)
+                          }}
+                        />
+                        <HistoryGraphRail
+                          row={graphRows[index]}
+                          width={graphWidth}
+                          head={!!entry.is_head}
+                        />
                         <ContextMenu>
                           <ContextMenuTrigger asChild>
                             {/* px-2 floats the card off both rims; the first row
@@ -2293,7 +2466,7 @@ export function GitLogTab() {
                                 menu. */}
                             <div
                               className={cn(
-                                "px-2 py-0.5",
+                                "min-w-0 flex-1 px-1 py-0.5",
                                 index === 0 && "pt-2"
                               )}
                             >
@@ -2348,6 +2521,25 @@ export function GitLogTab() {
                                     <p className="truncate text-[0.8125rem] font-medium leading-snug text-foreground/70 transition-colors group-hover:text-foreground group-data-[state=open]:text-foreground">
                                       {entry.message}
                                     </p>
+                                    {(entry.is_head ||
+                                      !!entry.refs?.length) && (
+                                      <div className="flex flex-wrap gap-1">
+                                        {entry.is_head && (
+                                          <span className="rounded bg-primary/10 px-1 text-3xs font-medium text-primary">
+                                            HEAD
+                                          </span>
+                                        )}
+                                        {entry.refs?.map((ref) => (
+                                          <span
+                                            key={ref}
+                                            className="max-w-full truncate rounded bg-muted px-1 text-3xs text-muted-foreground"
+                                            title={ref}
+                                          >
+                                            {ref}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    )}
                                     <div className="flex min-w-0 items-center gap-1.5 text-2xs text-muted-foreground">
                                       <span className="min-w-0 truncate">
                                         {entry.author}
@@ -2517,6 +2709,89 @@ export function GitLogTab() {
                             </div>
                           </ContextMenuTrigger>
                           <ContextMenuContent>
+                            <ContextMenuItem
+                              disabled={folderStale || gitActions.running}
+                              onSelect={() => {
+                                if (folder)
+                                  setAdvanced({
+                                    path: folder.path,
+                                    commits: [entry.full_hash],
+                                  })
+                              }}
+                            >
+                              {tAdvanced("title")}
+                            </ContextMenuItem>
+                            <ContextMenuItem
+                              disabled={folderStale}
+                              onSelect={() => {
+                                if (folder)
+                                  setRevisionTarget({
+                                    path: folder.path,
+                                    revision: entry.full_hash,
+                                  })
+                              }}
+                            >
+                              {tRevision("title")}
+                            </ContextMenuItem>
+                            <ContextMenuItem
+                              disabled={gitActions.running || folderStale}
+                              onSelect={() => {
+                                if (folder)
+                                  setEditTarget({
+                                    path: folder.path,
+                                    base: entry.full_hash,
+                                    undo: false,
+                                  })
+                              }}
+                            >
+                              {tEdit("title")}
+                            </ContextMenuItem>
+                            {entry.is_head && (
+                              <ContextMenuItem
+                                disabled={gitActions.running || folderStale}
+                                onSelect={() => {
+                                  if (folder)
+                                    setEditTarget({
+                                      path: folder.path,
+                                      base: entry.full_hash,
+                                      undo: true,
+                                    })
+                                }}
+                              >
+                                {tEdit("undo")}
+                              </ContextMenuItem>
+                            )}
+                            {(["cherry-pick", "revert"] as const).map(
+                              (operation) => (
+                                <ContextMenuItem
+                                  key={operation}
+                                  disabled={gitActions.running || folderStale}
+                                  onSelect={() => {
+                                    if (
+                                      folder &&
+                                      (entry.parents?.length ?? 0) > 1
+                                    ) {
+                                      setAdvanced({
+                                        path: folder.path,
+                                        commits: [entry.full_hash],
+                                        operation,
+                                      })
+                                    } else if (folder)
+                                      setCommitAction({
+                                        path: folder.path,
+                                        hash: entry.full_hash,
+                                        operation,
+                                      })
+                                  }}
+                                >
+                                  {tWorkbench(
+                                    operation === "cherry-pick"
+                                      ? "cherryPick"
+                                      : "revert"
+                                  )}
+                                </ContextMenuItem>
+                              )
+                            )}
                             <ContextMenuItem
                               onSelect={() => {
                                 handleOpenNewBranchDialog(entry)
@@ -2769,8 +3044,103 @@ export function GitLogTab() {
         </DialogContent>
       </Dialog>
 
+      <Dialog
+        open={commitAction !== null}
+        onOpenChange={(open) => {
+          if (!open && !gitActions.running) setCommitAction(null)
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {tWorkbench(
+                commitAction?.operation === "revert" ? "revert" : "cherryPick"
+              )}
+            </DialogTitle>
+            <DialogDescription>
+              {tWorkbench("commitActionDescription", {
+                hash: commitAction?.hash.slice(0, 12) ?? "",
+              })}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              disabled={gitActions.running}
+              onClick={() => setCommitAction(null)}
+            >
+              {tCommon("cancel")}
+            </Button>
+            <Button
+              disabled={gitActions.running || !commitAction}
+              onClick={() => {
+                const target = commitAction
+                if (!target) return
+                void gitActions.runGitTask(
+                  tWorkbench(
+                    target.operation === "revert" ? "revert" : "cherryPick"
+                  ),
+                  () =>
+                    gitCommitAction(target.path, target.hash, target.operation),
+                  (result) => {
+                    setCommitAction(null)
+                    if (result.conflict) {
+                      gitActions.reportConflict(result.conflict)
+                      return false
+                    }
+                  }
+                )
+              }}
+            >
+              {tCommon("confirm")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       {gitActions.dialogs}
       {remoteManageDialog}
+      {advanced && (
+        <GitHistoryAdvancedDialog
+          path={advanced.path}
+          commits={advanced.commits}
+          initialOperation={advanced.operation}
+          onClose={() => setAdvanced(null)}
+          onCompleted={() => {
+            setSelectedHistory(new Set())
+            void fetchLog({ inline: true })
+          }}
+          onConflict={gitActions.reportConflict}
+        />
+      )}
+      {revisionTarget && (
+        <GitRevisionBrowser
+          path={revisionTarget.path}
+          initialRevision={revisionTarget.revision}
+          onClose={() => setRevisionTarget(null)}
+          onChanged={() => void fetchLog({ inline: true })}
+        />
+      )}
+      {editTarget && (
+        <GitHistoryEditDialog
+          key={`${editTarget.path}:${editTarget.base}:${editTarget.undo}`}
+          path={editTarget.path}
+          base={editTarget.base}
+          undo={editTarget.undo}
+          onClose={() => setEditTarget(null)}
+          onCompleted={() => void fetchLog({ inline: true })}
+          onConflict={gitActions.reportConflict}
+        />
+      )}
     </div>
+  )
+}
+
+export function GitLogTab({
+  refreshToken = 0,
+}: { refreshToken?: number } = {}) {
+  return (
+    <GitFileHistoryProvider>
+      <GitLogTabContent refreshToken={refreshToken} />
+    </GitFileHistoryProvider>
   )
 }

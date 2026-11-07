@@ -39,6 +39,7 @@ export function ConflictDialog({
   onResolved,
 }: ConflictDialogProps) {
   const t = useTranslations("Folder.branchDropdown.conflict")
+  const tWorkbench = useTranslations("Folder.gitWorkbench")
   const [conflictedFiles, setConflictedFiles] = useState<string[]>([])
   const [resolvedFiles, setResolvedFiles] = useState<Set<string>>(new Set())
   const [aborting, setAborting] = useState(false)
@@ -47,6 +48,7 @@ export function ConflictDialog({
 
   const open = conflictInfo !== null
   const operation = conflictInfo?.operation ?? "merge"
+  const restoring = operation === "stash" || operation === "shelf"
 
   // Initialize conflict files from conflictInfo
   useEffect(() => {
@@ -62,6 +64,10 @@ export function ConflictDialog({
     if (!folderPath || !open) return
     try {
       const remaining = await gitListConflicts(folderPath)
+      setConflictedFiles((previous) => {
+        const next = [...new Set([...previous, ...remaining])]
+        return next.length === previous.length ? previous : next
+      })
       const nowResolved = new Set(
         conflictedFiles.filter((f) => !remaining.includes(f))
       )
@@ -171,6 +177,7 @@ export function ConflictDialog({
       onResolved()
       onClose()
     } catch (err) {
+      await refreshConflicts()
       toast.error(String(err))
     } finally {
       setCompleting(false)
@@ -183,7 +190,7 @@ export function ConflictDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <AlertTriangle className="h-4 w-4 text-amber-500" />
-            {t("title")}
+            {restoring ? tWorkbench("restoreConflictsTitle") : t("title")}
           </DialogTitle>
           <DialogDescription>{t("description")}</DialogDescription>
         </DialogHeader>
@@ -218,17 +225,19 @@ export function ConflictDialog({
         </ScrollArea>
 
         <DialogFooter className="flex-row justify-between sm:justify-between">
-          <Button
-            variant="destructive"
-            size="sm"
-            onClick={handleAbort}
-            disabled={aborting || completing}
-          >
-            {aborting && (
-              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-            )}
-            {t("abort")}
-          </Button>
+          {!restoring && (
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={handleAbort}
+              disabled={aborting || completing}
+            >
+              {aborting && (
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              )}
+              {t("abort")}
+            </Button>
+          )}
           <div className="flex gap-2">
             <Button
               variant="outline"
@@ -247,7 +256,7 @@ export function ConflictDialog({
                 {completing && (
                   <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
                 )}
-                {t("completeMerge")}
+                {restoring ? tWorkbench("finishRestore") : t("completeMerge")}
               </Button>
             )}
           </div>

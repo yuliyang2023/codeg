@@ -1,6 +1,6 @@
-// Inline vs. side-by-side layout for the lightweight diff preview
-// (`UnifiedDiffPreview`). Persisted in localStorage; defaults to the inline
-// view so the existing look is unchanged until the user opts in.
+// Inline vs. side-by-side layout shared by diff previews and Monaco's full
+// file viewer. Each host keeps its existing default until the user chooses a
+// mode; an explicit choice is persisted and shared by all viewers.
 //
 // The preference is GLOBAL, and a single screen routinely mounts several
 // previews at once (one per Edit/Write tool call in a transcript, plus any
@@ -16,15 +16,17 @@ export type DiffViewMode = "unified" | "split"
 const DIFF_VIEW_MODE_KEY = "workspace:diff-view-mode"
 const DIFF_VIEW_MODE_EVENT = "codeg:diff-view-mode-changed"
 
-export function loadDiffViewMode(): DiffViewMode {
-  if (typeof window === "undefined") return "unified"
+export function loadDiffViewMode(
+  defaultMode: DiffViewMode = "unified"
+): DiffViewMode {
+  if (typeof window === "undefined") return defaultMode
   try {
     const raw = localStorage.getItem(DIFF_VIEW_MODE_KEY)
     if (raw === "split" || raw === "unified") return raw
   } catch {
     /* ignore */
   }
-  return "unified"
+  return defaultMode
 }
 
 export function saveDiffViewMode(mode: DiffViewMode): void {
@@ -51,23 +53,24 @@ function modeFromEvent(event: Event): DiffViewMode | null {
  * Every mounted preview flips together — including ones the user is not
  * pointing at — because the mode is one preference, not per-preview state.
  */
-export function useDiffViewMode(): [
-  DiffViewMode,
-  (mode: DiffViewMode) => void,
-] {
-  const [mode, setMode] = useState<DiffViewMode>(loadDiffViewMode)
+export function useDiffViewMode(
+  defaultMode: DiffViewMode = "unified"
+): [DiffViewMode, (mode: DiffViewMode) => void] {
+  const [mode, setMode] = useState<DiffViewMode>(() =>
+    loadDiffViewMode(defaultMode)
+  )
   useEffect(() => {
     // Same-window broadcasts carry the value; a cross-window `storage` event
     // does not, so re-read for those.
     const sync = (event: Event) =>
-      setMode(modeFromEvent(event) ?? loadDiffViewMode())
+      setMode(modeFromEvent(event) ?? loadDiffViewMode(defaultMode))
     window.addEventListener(DIFF_VIEW_MODE_EVENT, sync)
     window.addEventListener("storage", sync)
     return () => {
       window.removeEventListener(DIFF_VIEW_MODE_EVENT, sync)
       window.removeEventListener("storage", sync)
     }
-  }, [])
+  }, [defaultMode])
   // `saveDiffViewMode` writes and then dispatches synchronously, so this
   // instance updates through the same subscription as its siblings — one path
   // instead of a local `setState` that could drift from the broadcast one.

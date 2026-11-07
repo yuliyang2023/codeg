@@ -16,6 +16,7 @@ import { toErrorMessage } from "@/lib/app-error"
 import type { FolderDetail } from "@/lib/types"
 import { GitCredentialProvider } from "@/contexts/git-credential-context"
 import { RemoteConnectionGate } from "@/contexts/remote-connection-context"
+import { isDesktop } from "@/lib/platform"
 
 const TOAST_DURATION_MS = 6000
 
@@ -42,6 +43,10 @@ function CommitPageInner() {
   const error = state.loadedId === normalizedFolderId ? state.error : null
 
   const closeWindow = useCallback(async () => {
+    if (!isDesktop()) {
+      window.close()
+      return
+    }
     try {
       const win = await getCurrentWindow()
       await win.close()

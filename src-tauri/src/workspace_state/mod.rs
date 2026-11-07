@@ -315,6 +315,9 @@ impl WatchEventBatch {
 
         let mut has_relevant_path = false;
         for path in event.paths {
+            if crate::commands::git_workbench_store::is_metadata_path(&path) {
+                continue;
+            }
             let Some(relative) = classify_watch_path(&path, root_canonical, git_watch_dirs) else {
                 continue;
             };
@@ -904,6 +907,24 @@ async fn flush_watch_batch(
         return;
     }
 
+    let history_root = root_display.to_string();
+    let history_paths = batch
+        .changed_paths
+        .iter()
+        .filter(|p| !is_git_metadata_rel_path(p))
+        .cloned()
+        .collect::<Vec<_>>();
+    let history_overflow = batch.overflowed;
+    let _ = tokio::task::spawn_blocking(move || {
+        if history_overflow {
+            let _ =
+                crate::commands::local_history::capture_project(&history_root, "external", None);
+        } else {
+            crate::commands::local_history::automatic(&history_root, &history_paths, "external");
+        }
+    })
+    .await;
+
     let event_kind_hint = batch.kind(root_canonical);
     let changed_paths = if batch.overflowed {
         Vec::new()
@@ -1358,6 +1379,17 @@ pub async fn start_workspace_state_stream_core(
         .ok_or_else(|| AppCommandError::task_execution_failed("Failed to create watcher"))?
         .watch(&root_canonical, RecursiveMode::Recursive);
 
+    if watch_result.is_ok() {
+        let history_root = root_path.clone();
+        tokio::task::spawn_blocking(move || {
+            let _ = crate::commands::local_history::capture_project(
+                &history_root,
+                "workspace-open",
+                None,
+            );
+        });
+    }
+
     if let Err(err) = watch_result {
         tracing::info!(
             "[workspace-state-watch] degraded (no realtime updates) for {}: {}",
@@ -1499,11 +1531,12 @@ pub async fn stop_workspace_state_stream_core(
         // between start and stop bookkeeping) must not underflow and wedge
         // the stream in permanent full-scan mode.
         if wants_tree_git {
-            let _ = entry.full_subscribers.try_update(
-                Ordering::AcqRel,
-                Ordering::Acquire,
-                |count| count.checked_sub(1),
-            );
+            let _ =
+                entry
+                    .full_subscribers
+                    .try_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                        count.checked_sub(1)
+                    });
         }
         if entry.ref_count > 1 {
             entry.ref_count -= 1;

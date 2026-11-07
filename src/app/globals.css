@@ -4201,3 +4201,9 @@ div.monaco-diff-editor.side-by-side .editor.modified {
     opacity: 0;
   }
 }
+
+.codeg-inline-blame {
+  color: var(--muted-foreground);
+  opacity: 0.65;
+  font-style: italic;
+}

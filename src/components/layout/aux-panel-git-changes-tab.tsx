@@ -1,6 +1,13 @@
 "use client"
 
 import {
+  ChangelistFilter,
+  useChangelists,
+  changelistForFile,
+} from "./git-changelists"
+import { GitFileHistoryProvider, GitFileHistoryMenu } from "./git-file-history"
+
+import {
   type ReactElement,
   useCallback,
   useDeferredValue,
@@ -75,6 +82,8 @@ import { AuxPanelNoFolderEmpty } from "@/components/layout/aux-panel-no-folder-e
 import { CommitMessageGenerateButton } from "@/components/layout/commit-message-generate-button"
 import { CommitMessageSettingsDialog } from "@/components/layout/commit-message-settings-dialog"
 import { CommitUntrackedFilesDialog } from "@/components/layout/commit-untracked-files-dialog"
+import { AmendCommitDialog } from "@/components/layout/amend-commit-dialog"
+import { GitOperationBanner } from "@/components/layout/git-operation-banner"
 import { GIT_TOOLBAR_ICON_BUTTON_CLASS } from "@/components/layout/git-toolbar-controls"
 import { WorkspaceDegradedBanner } from "@/components/layout/workspace-degraded-banner"
 import {
@@ -502,7 +511,11 @@ function canOpenFile(status: string): boolean {
   return !status.trim().toUpperCase().includes("D")
 }
 
-export function GitChangesTab() {
+function GitChangesTabContent({
+  showOperationBanner = true,
+}: { showOperationBanner?: boolean } = {}) {
+  const tWorkbench = useTranslations("Folder.gitWorkbench")
+  const [amendOpen, setAmendOpen] = useState(false)
   const ime = useImeGuard()
   const t = useTranslations("Folder.gitChangesTab")
   const tCommon = useTranslations("Folder.common")
@@ -589,8 +602,15 @@ export function GitChangesTab() {
     return activeTab?.kind === "conversation" ? activeTab.agentType : null
   }, [activeTabId, tabs])
 
+  const changelists = useChangelists(folder?.path ?? null)
   const changes = useMemo<WorkingTreeChange[]>(() => {
     return [...workspaceState.git]
+      .filter(
+        (entry) =>
+          changelists.id === "all" ||
+          !changelists.state ||
+          changelistForFile(changelists.state, entry.path) === changelists.id
+      )
       .map((entry) => ({
         path: entry.path,
         status: entry.status,
@@ -600,7 +620,7 @@ export function GitChangesTab() {
       .sort((left, right) =>
         left.path.localeCompare(right.path, undefined, { sensitivity: "base" })
       )
-  }, [workspaceState.git])
+  }, [workspaceState.git, changelists.id, changelists.state])
 
   const loading = useMemo(
     () => workspaceState.health === "resyncing" && workspaceState.seq === 0,
@@ -1247,6 +1267,7 @@ export function GitChangesTab() {
     setRollbackTarget(null)
     setDeleteTarget(null)
     setCommitMessage("")
+    setAmendOpen(false)
     setUntrackedOffer(null)
     setIncludedUntracked([])
     setExcludedUntracked(new Set())
@@ -1403,6 +1424,7 @@ export function GitChangesTab() {
             >
               {tFileTree("attachToCurrentSession")}
             </ContextMenuItem>
+            <GitFileHistoryMenu file={file.path} />
             <ContextMenuItem disabled>{t("actions.addToVcs")}</ContextMenuItem>
             <ContextMenuItem
               onSelect={() => {
@@ -1648,6 +1670,21 @@ export function GitChangesTab() {
 
   return (
     <div className="flex flex-col h-full min-h-0">
+      {folder && showOperationBanner && (
+        <GitOperationBanner key={`operation:${folder.path}`} folder={folder} />
+      )}
+      {folder && (
+        <AmendCommitDialog
+          key={`amend:${folder.path}`}
+          path={folder.path}
+          open={amendOpen}
+          onOpenChange={setAmendOpen}
+          onCompleted={() =>
+            void workspaceState.requestResync("git_action:amend")
+          }
+        />
+      )}
+      {workspaceState.isGitRepo && <ChangelistFilter model={changelists} />}
       {/* Toolbar: type a message and commit right here with Enter, or reach the
           same git operations the branch selector offers. A message box, the ✨
           that writes the message, and one round "more" circle — no commit
@@ -1735,6 +1772,12 @@ export function GitChangesTab() {
               <DropdownMenuItem onSelect={handleOpenCommitWindow}>
                 <GitCommitHorizontal />
                 {tBranch("openCommitWindow")}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={gitActions.running || committing}
+                onSelect={() => setAmendOpen(true)}
+              >
+                {tWorkbench("amend")}
               </DropdownMenuItem>
               <DropdownMenuItem
                 onSelect={() => generation.setSettingsOpen(true)}
@@ -2342,5 +2385,15 @@ export function GitChangesTab() {
 
       {gitActions.dialogs}
     </div>
+  )
+}
+
+export function GitChangesTab(
+  props: React.ComponentProps<typeof GitChangesTabContent>
+) {
+  return (
+    <GitFileHistoryProvider>
+      <GitChangesTabContent {...props} />
+    </GitFileHistoryProvider>
   )
 }

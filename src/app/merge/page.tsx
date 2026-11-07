@@ -14,6 +14,7 @@ import { AppToaster } from "@/components/ui/app-toaster"
 import { getFolder } from "@/lib/api"
 import type { FolderDetail } from "@/lib/types"
 import { RemoteConnectionGate } from "@/contexts/remote-connection-context"
+import { isDesktop } from "@/lib/platform"
 
 const TOAST_DURATION_MS = 6000
 
@@ -42,6 +43,10 @@ function MergePageInner() {
   const error = state.loadedId === normalizedFolderId ? state.error : null
 
   const closeWindow = useCallback(async () => {
+    if (!isDesktop()) {
+      window.close()
+      return
+    }
     try {
       const win = await getCurrentWindow()
       await win.close()

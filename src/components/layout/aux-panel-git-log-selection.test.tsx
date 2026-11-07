@@ -11,6 +11,7 @@ import { useEffect, type ReactNode } from "react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { GitLogTab } from "./aux-panel-git-log-tab"
+import { DEFAULT_HISTORY_OPTIONS } from "./git-history-filters"
 import enMessages from "@/i18n/messages/en.json"
 import type { GitBranchList, GitLogEntry } from "@/lib/types"
 
@@ -192,7 +193,64 @@ describe("Commits tab branch query", () => {
       undefined,
       false,
       false,
+      DEFAULT_HISTORY_OPTIONS,
     ])
+  })
+
+  it("refreshes retained history when returning from another workflow tab", async () => {
+    const view = render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <GitLogTab refreshToken={0} />
+      </NextIntlClientProvider>
+    )
+    await waitFor(() => expect(state.gitLog).toHaveBeenCalled())
+    const calls = state.gitLog.mock.calls.length
+    view.rerender(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <GitLogTab refreshToken={1} />
+      </NextIntlClientProvider>
+    )
+    await waitFor(() => expect(state.gitLog).toHaveBeenCalledTimes(calls + 1))
+  })
+
+  it("applies search to the repository query and restores it on reopening", async () => {
+    const first = renderTab()
+    fireEvent.click(
+      await screen.findByRole("button", { name: "History filters" })
+    )
+    fireEvent.change(screen.getByPlaceholderText("Commit message"), {
+      target: { value: "specific fix" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Apply filters" }))
+    await waitFor(() =>
+      expect(state.gitLog).toHaveBeenLastCalledWith(
+        "/worktrees/a",
+        100,
+        "HEAD",
+        undefined,
+        0,
+        undefined,
+        false,
+        false,
+        { ...DEFAULT_HISTORY_OPTIONS, search: "specific fix" }
+      )
+    )
+    first.unmount()
+    state.gitLog.mockClear()
+    renderTab()
+    await waitFor(() =>
+      expect(state.gitLog).toHaveBeenCalledWith(
+        "/worktrees/a",
+        100,
+        "HEAD",
+        undefined,
+        0,
+        undefined,
+        false,
+        false,
+        { ...DEFAULT_HISTORY_OPTIONS, search: "specific fix" }
+      )
+    )
   })
 
   it("ignores an older branch refresh that omits the saved branch", async () => {
@@ -318,7 +376,8 @@ describe("Commits tab branch query", () => {
         0,
         undefined,
         true,
-        false
+        false,
+        DEFAULT_HISTORY_OPTIONS
       )
     )
 
@@ -334,7 +393,8 @@ describe("Commits tab branch query", () => {
         0,
         undefined,
         true,
-        false
+        false,
+        DEFAULT_HISTORY_OPTIONS
       )
     )
   })
@@ -395,7 +455,8 @@ describe("Commits tab branch query", () => {
       0,
       undefined,
       false,
-      false
+      false,
+      DEFAULT_HISTORY_OPTIONS
     )
   })
 
@@ -428,7 +489,8 @@ describe("Commits tab branch query", () => {
       0,
       undefined,
       true,
-      false
+      false,
+      DEFAULT_HISTORY_OPTIONS
     )
   })
 })
